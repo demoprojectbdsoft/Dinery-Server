@@ -31,6 +31,20 @@ const orderSchema = new Schema(
     subtotal: { type: Number, required: true },
     shippingFee: { type: Number, required: true },
     totalAmount: { type: Number, required: true },
+    /**
+     * The shipping option chosen for this order, derived from the live site
+     * settings at checkout time:
+     *   "free"    — free shipping (subtotal >= freeShippingThreshold)
+     *   "standard" — standard delivery (SHIPPING_FEE)
+     *   "express"  — express delivery (EXPRESS_DELIVERY_FEE)
+     */
+    shippingMethod: {
+      type: String,
+      enum: ["free", "standard", "express"],
+      default: "standard",
+    },
+    /** Estimated delivery window copied from site settings at checkout. */
+    estimatedDelivery: { type: String, default: "" },
     orderStatus: {
       type: String,
       enum: ["confirmed", "processing", "shipped", "delivered", "cancelled"],

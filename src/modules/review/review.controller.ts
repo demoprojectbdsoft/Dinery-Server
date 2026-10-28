@@ -20,7 +20,12 @@ export const getReviews = catchAsync(async (req, res, next) => {
 
 
 export const updateReview = catchAsync(async (req, res) => {
-  const review = await reviewService.updateReview(req.params.id as string, req.body);
+  const review = await reviewService.updateReview(
+    req.params.id as string,
+    req.body,
+    req.user?.id,
+    req.user?.role
+  );
   apiResponse(res, 200, review, "Review updated");
 });
 

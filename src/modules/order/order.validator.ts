@@ -25,6 +25,9 @@ export const createOrderSchema = z
     shippingAddress: shippingAddressSchema.optional(),
     paymentMethod: z.enum(["cod", "bkash", "rocket", "nagad"]),
     transactionId: z.string().optional(),
+    /** Optional explicit shipping choice from checkout ("free" | "standard" | "express").
+     *  When omitted the backend resolves it from the live site settings. */
+    shippingMethod: z.enum(["free", "standard", "express"]).optional(),
   })
   .superRefine((data, ctx) => {
     if (data.paymentMethod === "cod") {

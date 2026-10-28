@@ -150,8 +150,32 @@ export async function createReview(data: CreateReviewInput) {
   );
 }
 
-export async function updateReview(id: string, data: UpdateReviewInput) {
-  return ProductReview.findByIdAndUpdate(id, data, { new: true }).lean();
+export async function updateReview(
+  id: string,
+  data: UpdateReviewInput,
+  requesterId?: string,
+  requesterRole?: string
+) {
+  const review = await ProductReview.findById(id);
+  if (!review) throw new ApiError(404, "Review not found");
+
+  // Admins cannot submit (and therefore cannot edit) reviews
+  const role = (requesterRole || "").toLowerCase();
+  if (role === "admin" || role === "demoadmin") {
+    throw new ApiError(403, "Admins cannot edit reviews.");
+  }
+
+  // Only the reviewer themselves can edit their own review
+  if (requesterId && review.userId.toString() !== requesterId) {
+    throw new ApiError(403, "You can only edit your own reviews.");
+  }
+
+  const updated = await ProductReview.findByIdAndUpdate(id, data, { new: true })
+    .populate("userId", "name email image")
+    .populate("productId", "title slug image price");
+  if (!updated) throw new ApiError(404, "Review not found");
+
+  return formatReview(updated, (updated as any).userId, (updated as any).productId);
 }
 
 export async function deleteReview(id: string) {

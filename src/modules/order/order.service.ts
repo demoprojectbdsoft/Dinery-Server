@@ -7,12 +7,52 @@ import { ApiError } from "../../utils/apiError";
 import { CreateOrderInput, UpdateOrderStatusInput, CustomerResponseInput, GetOrdersQuery } from "./order.validator";
 import { logOrderStatus } from "../order-status/order-status.service";
 import { createTransaction, getLatestTransactionForOrder } from "../transaction/transaction.service";
+import { getSiteSettings } from "../site-settings/site-settings.service";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SHIPPING_FEE       = 15.0;
+const EXPRESS_DELIVERY_FEE = 25.0;
 const FREE_SHIPPING_FROM = 50.0;
 const POINTS_PER_DOLLAR  = 1;
+
+/**
+ * Resolve the shipping option for an order from the live site settings.
+ * Returns the chosen method ("free" | "standard" | "express"), the fee to
+ * charge, and the estimated delivery window to display on the receipt.
+ */
+async function resolveShippingConfig(subtotal: number): Promise<{
+  method: "free" | "standard" | "express";
+  fee: number;
+  estimatedDelivery: string;
+  expressFee: number;
+}> {
+  // Defaults mirror AdminSettingsClient → Shipping & Delivery card
+  let freeEnabled = true;
+  let freeThreshold = FREE_SHIPPING_FROM;
+  let standardFee = SHIPPING_FEE;
+  let expressFee = EXPRESS_DELIVERY_FEE;
+  let estimatedDelivery = "2-4 business days";
+
+  try {
+    const settings: any = await getSiteSettings();
+    const s = settings?.shipping || {};
+    if (typeof s.freeShippingEnabled === "boolean") freeEnabled = s.freeShippingEnabled;
+    if (typeof s.freeShippingThreshold === "number") freeThreshold = s.freeShippingThreshold;
+    if (typeof s.standardDeliveryFee === "number") standardFee = s.standardDeliveryFee;
+    if (typeof s.expressDeliveryFee === "number") expressFee = s.expressDeliveryFee;
+    if (typeof s.estimatedDeliveryDays === "string" && s.estimatedDeliveryDays.trim()) {
+      estimatedDelivery = s.estimatedDeliveryDays;
+    }
+  } catch {
+    // Backend unreachable — fall back to the constants above
+  }
+
+  if (freeEnabled && subtotal >= freeThreshold) {
+    return { method: "free", fee: 0, estimatedDelivery, expressFee };
+  }
+  return { method: "standard", fee: standardFee, estimatedDelivery, expressFee };
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -52,7 +92,25 @@ export async function createOrder(data: CreateOrderInput) {
     });
   }
 
-  const shippingFee   = subtotal >= FREE_SHIPPING_FROM ? 0 : SHIPPING_FEE;
+  // Resolve shipping. If the client explicitly chose a method (free/standard/
+  // express), honour it; otherwise derive it from the live site settings.
+  let shippingConfig: { method: "free" | "standard" | "express"; fee: number; estimatedDelivery: string };
+  if (data.shippingMethod) {
+    const resolved = await resolveShippingConfig(subtotal);
+    const fee =
+      data.shippingMethod === "free"    ? 0 :
+      data.shippingMethod === "express" ? resolved.expressFee :
+      resolved.method === "free" ? 0 : resolved.fee;
+    shippingConfig = {
+      method: data.shippingMethod,
+      fee,
+      estimatedDelivery: resolved.estimatedDelivery,
+    };
+  } else {
+    shippingConfig = await resolveShippingConfig(subtotal);
+  }
+
+  const shippingFee   = shippingConfig.fee;
   const totalAmount   = subtotal + shippingFee;
   const pointsEarned  = Math.floor(subtotal * POINTS_PER_DOLLAR);
 
@@ -65,6 +123,8 @@ export async function createOrder(data: CreateOrderInput) {
     subtotal,
     shippingFee,
     totalAmount,
+    shippingMethod: shippingConfig.method,
+    estimatedDelivery: shippingConfig.estimatedDelivery,
     pointsEarned,
   });
 
