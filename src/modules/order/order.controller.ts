@@ -29,7 +29,11 @@ export const getOrderById = catchAsync(async (req, res) => {
 });
 
 export const updateOrderStatus = catchAsync(async (req, res) => {
-  const order = await orderService.updateOrderStatus(req.params.id as string, req.body);
+  const order = await orderService.updateOrderStatus(
+    req.params.id as string,
+    req.body,
+    req.user?.id
+  );
   apiResponse(res, 200, order, "Order status updated");
 });
 

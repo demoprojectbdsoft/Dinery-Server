@@ -7,9 +7,14 @@ export type OrderStatusValue = "confirmed" | "processing" | "shipped" | "deliver
 export async function logOrderStatus(
   orderId: string,
   status: OrderStatusValue,
-  options: { note?: string; session?: ClientSession } = {}
+  options: { note?: string; changedBy?: string; session?: ClientSession } = {}
 ) {
-  const log = new OrderStatusLog({ orderId, status, note: options.note });
+  const log = new OrderStatusLog({
+    orderId,
+    status,
+    note: options.note,
+    changedBy: options.changedBy ?? "",
+  });
   await log.save({ session: options.session });
   return log;
 }

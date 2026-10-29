@@ -9,6 +9,8 @@ const orderStatusSchema = new Schema(
       required: true,
     },
     note: { type: String },
+    /** Id of the user who made the change (kept as a string: demo users have no real ObjectId). */
+    changedBy: { type: String, default: "" },
   },
   { timestamps: true }
 );

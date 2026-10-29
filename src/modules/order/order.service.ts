@@ -346,7 +346,11 @@ export async function getOrderById(id: string) {
 
 // ─── Update Order Status (Admin) ──────────────────────────────────────────────
 
-export async function updateOrderStatus(id: string, data: UpdateOrderStatusInput) {
+export async function updateOrderStatus(
+  id: string,
+  data: UpdateOrderStatusInput,
+  changedBy?: string
+) {
   // The status write, the timeline entry and the settlement side effects must
   // not be left half-applied if one of them fails.
   return withTransaction(async (session) => {
@@ -395,7 +399,7 @@ export async function updateOrderStatus(id: string, data: UpdateOrderStatusInput
     const updated = await Order.findByIdAndUpdate(id, data, { new: true, session });
     if (!updated) throw new ApiError(404, "Order not found");
 
-    await logOrderStatus(id, data.orderStatus, { session });
+    await logOrderStatus(id, data.orderStatus, { session, changedBy });
 
     // Settle the side effects of the new status. These need the *previous*
     // status, which is why the original document is kept around.
@@ -435,6 +439,7 @@ export async function updateCustomerResponse(
   const noteLog = data.note ? ` - "${data.note}"` : "";
   await logOrderStatus(id, order.orderStatus, {
     note: `Customer response: ${data.response}${noteLog}`,
+    changedBy: requester?.id,
   });
 
   return order;
