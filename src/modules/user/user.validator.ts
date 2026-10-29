@@ -13,6 +13,27 @@ export const updateUserSchema = z.object({
   department: z.string().optional(),
 });
 
+/**
+ * Fields that decide what an account can do. Only an admin may write these —
+ * otherwise any signed-in user could promote themselves.
+ */
+export const ADMIN_ONLY_USER_FIELDS = [
+  "role",
+  "plan",
+  "status",
+  "member",
+  "points",
+  "department",
+] as const;
+
+/** The only fields a customer may change on their own profile. */
+export const selfUpdateUserSchema = updateUserSchema.pick({
+  name: true,
+  image: true,
+  phone: true,
+  bio: true,
+});
+
 export const getUsersQuerySchema = z.object({
   role: z.string().optional(),
   status: z.string().optional(),
@@ -23,4 +44,5 @@ export const getUsersQuerySchema = z.object({
 });
 
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
+export type SelfUpdateUserInput = z.infer<typeof selfUpdateUserSchema>;
 export type GetUsersQuery = z.infer<typeof getUsersQuerySchema>;

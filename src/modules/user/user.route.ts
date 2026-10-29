@@ -9,6 +9,8 @@ const router = Router();
 
 router.get("/", requireAuth, requireRole("admin"), userController.getUsers);
 router.get("/:id", requireAuth, userController.getUserById);
+// Ownership + field rules are enforced in the controller: admins may edit
+// anyone, a customer only their own profile and only non-privileged fields.
 router.patch("/:id", requireAuth, validate(updateUserSchema), userController.updateUser);
 router.delete("/:id", requireAuth, requireRole("admin"), userController.deleteUser);
 
