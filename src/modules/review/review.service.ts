@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { ProductReview } from "./review.model";
 import { User } from "../user/user.model";
 import { Product } from "../product/product.model";
+import { Order } from "../order/order.model";
 import { CreateReviewInput, UpdateReviewInput, GetReviewsQuery } from "./review.validator";
 import { ApiError } from "../../utils/apiError";
 import { assertOwnerOrAdmin } from "../../utils/authz";
@@ -155,10 +156,40 @@ export async function getReviews(query: GetReviewsQuery) {
   };
 }
 
-export async function createReview(data: CreateReviewInput) {
+/**
+ * A review has to be earned: the product must have been delivered to the
+ * customer, and each customer gets one review per product.
+ *
+ * Both rules are reported as 400/409 rather than 403 so the storefront can show
+ * the reason instead of bouncing the user to the forbidden page.
+ */
+async function assertEligibleToReview(userId: string, productId: string) {
+  const alreadyReviewed = await ProductReview.findOne({
+    userId: idQuery(userId),
+    productId: idQuery(productId),
+  })
+    .select("_id")
+    .lean();
+  if (alreadyReviewed) throw new ApiError(409, "You have already reviewed this product");
+
+  const deliveredOrder = await Order.findOne({
+    userId,
+    orderStatus: "delivered",
+    "items.productId": idQuery(productId),
+  })
+    .select("_id")
+    .lean();
+  if (!deliveredOrder) {
+    throw new ApiError(400, "You can review this product once your order has been delivered");
+  }
+}
+
+export async function createReview(data: CreateReviewInput, userId: string) {
+  await assertEligibleToReview(userId, data.productId);
+
   const [review, user, product] = await Promise.all([
-    ProductReview.create(data),
-    User.findById(data.userId).lean(),
+    ProductReview.create({ ...data, userId }),
+    User.findById(userId).lean(),
     Product.findById(data.productId).lean(),
   ]);
   return formatReview(

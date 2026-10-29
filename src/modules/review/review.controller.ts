@@ -1,11 +1,12 @@
 import { catchAsync } from "../../utils/catchAsync";
 import { apiResponse } from "../../utils/apiResponse";
 import { parseQuery } from "../../utils/validate";
+import { currentUserId } from "../../utils/authz";
 import * as reviewService from "./review.service";
 import { getReviewsQuerySchema } from "./review.validator";
 
 export const createReview = catchAsync(async (req, res) => {
-  const review = await reviewService.createReview(req.body);
+  const review = await reviewService.createReview(req.body, currentUserId(req.user));
   apiResponse(res, 201, review, "Review added");
 });
 

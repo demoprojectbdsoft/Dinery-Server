@@ -11,4 +11,15 @@ const productReviewSchema = new Schema(
   { timestamps: true }
 );
 
-export const ProductReview = model("ProductReview", productReviewSchema);
+// One review per customer per product. The service checks this first, and the
+// index makes sure a double submit cannot slip through between the check and
+// the insert.
+productReviewSchema.index({ userId: 1, productId: 1 }, { unique: true });
+
+export const ProductReview = model("ProductReview", productReviewSchema);
+
+// An existing duplicate pair would make the index impossible to build. Report it
+// instead of letting the rejection take the process down.
+ProductReview.init().catch((err: Error) => {
+  console.error("[REVIEW] Could not build the unique review index:", err.message);
+});
