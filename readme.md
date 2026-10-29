@@ -8,7 +8,6 @@
 
 [![Server Repo](https://img.shields.io/badge/Server-Repository-2ea44f?style=for-the-badge)](https://github.com/demoprojectbdsoft/Sparq-Server)
 [![Client Repo](https://img.shields.io/badge/Client-Repository-blue?style=for-the-badge)](https://github.com/demoprojectbdsoft/Sparq-Electronics-Store)
-[![Internship Project](https://img.shields.io/badge/Type-Internship%20Project-orange?style=for-the-badge)]()
 
 </div>
 
@@ -33,7 +32,7 @@
 8. [Setup](#-setup)
 9. [Project Status](#-project-status)
 10. [Roadmap](#️-roadmap)
-11. [About This Project](#-about-this-project)
+11. [About This Project](#ℹ️-about-this-project)
 
 ---
 
@@ -537,6 +536,6 @@ The schedule is UTC (about 2 AM Asia/Dhaka). On Vercel's Hobby plan a cron runs 
 
 ---
 
-## 🎓 About This Project
+## ℹ️ About This Project
 
-An internship project for learning and demonstration — not distributed under an open-source license. Feel free to explore the code, but please reach out before reusing or redistributing it.
+Not distributed under an open-source license. Feel free to explore the code, but please reach out before reusing or redistributing it.
