@@ -458,6 +458,19 @@ export async function updateOrderStatus(
       );
     }
 
+    // The other half of the same rule: once the customer confirms the parcel
+    // arrived, delivery is the only way to close a shipped order.
+    if (
+      order.orderStatus === "shipped" &&
+      data.orderStatus === "cancelled" &&
+      order.customerResponse === "received"
+    ) {
+      throw new ApiError(
+        400,
+        "The customer confirmed receipt, so this order can only be marked delivered"
+      );
+    }
+
     const updated = await Order.findByIdAndUpdate(id, data, { new: true, session });
     if (!updated) throw new ApiError(404, "Order not found");
 
@@ -491,6 +504,19 @@ export async function updateCustomerResponse(
 
   if (order.orderStatus !== "shipped") {
     throw new ApiError(400, "Response can only be submitted when the order is shipped");
+  }
+
+  // "Received" and "Cancelled" are the customer's final word, so they cannot be
+  // changed afterwards. "Not received" stays editable, because a late parcel can
+  // still be confirmed later.
+  const FINAL_RESPONSES = ["received", "cancelled"];
+  if (order.customerResponse && FINAL_RESPONSES.includes(order.customerResponse)) {
+    throw new ApiError(
+      400,
+      order.customerResponse === "received"
+        ? "You already confirmed this order as received, so the response can no longer be changed."
+        : "You already cancelled this order, so the response can no longer be changed."
+    );
   }
 
   order.customerResponse     = data.response;
