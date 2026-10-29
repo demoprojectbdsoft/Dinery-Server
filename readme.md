@@ -193,7 +193,7 @@ Both routers apply `requireAuth` to every route. The `:userId` path variants are
 | `GET` | `/orders/:id` | Bearer | Owner or admin only |
 | `POST` | `/orders` | Bearer | Places an order (see [Order lifecycle](#order-lifecycle)) |
 | `PATCH` | `/orders/:id/status` | Admin | Moves an order along the status flow |
-| `PATCH` | `/orders/:id/customer-response` | Bearer | Customer reports what happened after shipping |
+| `PATCH` | `/orders/:id/customer-response` | Bearer | Customer reports `received`, `not_received` or `cancelled` after shipping |
 | `GET` | `/order-status?orderId=` | Bearer | Status history of an order |
 | `GET` | `/transactions` | Public | Filterable payment records — see the [known gap](#-security) |
 
@@ -257,6 +257,19 @@ confirmed ──▶ processing ──▶ shipped ──▶ delivered
 | `cancelled` | none — a closed order can never be revived |
 
 Re-selecting the current stage is a no-op rather than an error, and every real transition writes a row to the status history (`order-status`) so the customer's timeline has a permanent record.
+
+**Delivery response** — a shipped order waits for the customer before it can be closed:
+
+| Response | Meaning | Can it change? |
+|---|---|---|
+| `received` | The parcel arrived — the order can only become `delivered` | Final |
+| `cancelled` | The customer refused the parcel — the order can only become `cancelled` | Final |
+| `not_received` | The parcel never arrived — the admin decides what happens next | Editable, because a late parcel can still be confirmed |
+
+- A response is accepted only while the order is `shipped`.
+- Moving a shipped order to `delivered` or `cancelled` is refused until the customer has answered.
+- The two are cross-checked: `not_received` or `cancelled` blocks `delivered`, and `received` blocks `cancelled`, so the admin can never contradict the customer.
+- Every response is written to the status history with its optional note.
 
 **Placing an order** — one `POST /orders` does all of this inside a single transaction:
 
