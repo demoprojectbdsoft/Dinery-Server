@@ -129,10 +129,16 @@ function buildOrderSearchCondition(search: string) {
 }
 
 /**
- * Cancelling: fail the payment, retire any warranty coverage, and undo the
- * sellCount the order contributed if it had already been delivered.
+ * Cancelling: fail the payment, retire any warranty coverage, put the stock
+ * back, and — when the order had already been delivered — undo the sale and
+ * the loyalty points it paid out.
  */
-async function applyCancellation(order: any, orderId: string, session?: ClientSession) {
+async function applyCancellation(
+  order: any,
+  orderId: string,
+  previousStatus: string,
+  session?: ClientSession
+) {
   await Transaction.updateMany(
     { orderId, status: { $ne: "failed" } },
     { $set: { status: "failed" } },
@@ -145,17 +151,34 @@ async function applyCancellation(order: any, orderId: string, session?: ClientSe
     console.error("[WARRANTY] Failed to void warranties for order", orderId, warrantyErr);
   }
 
-  if (order.orderStatus !== "delivered") return;
+  const wasDelivered = previousStatus === "delivered";
 
   for (const item of order.items || []) {
     const productId = orderItemProductId(item);
-    if (productId && item.quantity) {
-      await Product.findByIdAndUpdate(
-        productId,
-        { $inc: { sellCount: -item.quantity } },
-        { session }
-      );
-    }
+    if (!productId || !item.quantity) continue;
+
+    // Checkout took this stock out, and delivery counted it as a sale.
+    const changes: Record<string, number> = { stockQuantity: item.quantity };
+    if (wasDelivered) changes.sellCount = -item.quantity;
+
+    await Product.findByIdAndUpdate(productId, { $inc: changes }, { session });
+  }
+
+  if (!wasDelivered || !order.pointsEarned) return;
+
+  // Delivery credited these points, so a return takes them back and re-checks
+  // the tier the customer belongs to now.
+  const updatedUser = await User.findByIdAndUpdate(
+    order.userId,
+    { $inc: { points: -order.pointsEarned } },
+    { new: true, session }
+  );
+  if (!updatedUser) return;
+
+  const points = typeof updatedUser.points === "number" && !isNaN(updatedUser.points) ? updatedUser.points : 0;
+  const newTier = getMembershipTier(points);
+  if (updatedUser.member !== newTier) {
+    await User.findByIdAndUpdate(order.userId, { $set: { member: newTier } }, { session });
   }
 }
 
@@ -377,7 +400,7 @@ export async function updateOrderStatus(id: string, data: UpdateOrderStatusInput
     // Settle the side effects of the new status. These need the *previous*
     // status, which is why the original document is kept around.
     if (data.orderStatus === "cancelled") {
-      await applyCancellation(order, id, session);
+      await applyCancellation(order, id, order.orderStatus, session);
     }
 
     if (data.orderStatus === "delivered") {
