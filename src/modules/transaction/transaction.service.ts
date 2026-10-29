@@ -1,19 +1,27 @@
+import { ClientSession } from "mongoose";
 import { Transaction } from "./transaction.model";
 import { GetTransactionsQuery } from "./transaction.validator";
 
 export type PaymentMethod = "cod" | "bkash" | "rocket" | "nagad";
 
-export async function createTransaction(params: {
-  orderId: string;
-  userId: string;
-  method: PaymentMethod;
-  amount: number;
-  reference: string;
-}) {
-  return Transaction.create({
+/** Records the payment row for an order, optionally inside a caller's session. */
+export async function createTransaction(
+  params: {
+    orderId: string;
+    userId: string;
+    method: PaymentMethod;
+    amount: number;
+    reference: string;
+  },
+  session?: ClientSession
+) {
+  const transaction = new Transaction({
     ...params,
     status: params.method === "cod" ? "pending" : "success",
   });
+
+  await transaction.save({ session });
+  return transaction;
 }
 
 export async function getLatestTransactionForOrder(orderId: string) {

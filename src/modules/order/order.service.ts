@@ -1,3 +1,4 @@
+import { ClientSession } from "mongoose";
 import { Order } from "./order.model";
 import { Product } from "../product/product.model";
 import { Cart } from "../cart/cart.model";
@@ -5,6 +6,7 @@ import { User } from "../user/user.model";
 import { Transaction } from "../transaction/transaction.model";
 import { ApiError } from "../../utils/apiError";
 import { assertOwnerOrAdmin } from "../../utils/authz";
+import { withTransaction } from "../../utils/transactions";
 import { CreateOrderInput, UpdateOrderStatusInput, CustomerResponseInput, GetOrdersQuery } from "./order.validator";
 import { logOrderStatus } from "../order-status/order-status.service";
 import { createTransaction, getLatestTransactionForOrder } from "../transaction/transaction.service";
@@ -129,14 +131,15 @@ function buildOrderSearchCondition(search: string) {
  * Cancelling: fail the payment, retire any warranty coverage, and undo the
  * sellCount the order contributed if it had already been delivered.
  */
-async function applyCancellation(order: any, orderId: string) {
+async function applyCancellation(order: any, orderId: string, session?: ClientSession) {
   await Transaction.updateMany(
     { orderId, status: { $ne: "failed" } },
-    { $set: { status: "failed" } }
+    { $set: { status: "failed" } },
+    { session }
   );
 
   try {
-    await voidWarrantiesForOrder(orderId);
+    await voidWarrantiesForOrder(orderId, session);
   } catch (warrantyErr) {
     console.error("[WARRANTY] Failed to void warranties for order", orderId, warrantyErr);
   }
@@ -146,7 +149,11 @@ async function applyCancellation(order: any, orderId: string) {
   for (const item of order.items || []) {
     const productId = orderItemProductId(item);
     if (productId && item.quantity) {
-      await Product.findByIdAndUpdate(productId, { $inc: { sellCount: -item.quantity } });
+      await Product.findByIdAndUpdate(
+        productId,
+        { $inc: { sellCount: -item.quantity } },
+        { session }
+      );
     }
   }
 }
@@ -155,10 +162,16 @@ async function applyCancellation(order: any, orderId: string) {
  * Delivery: settle the payment, then (on the first delivery only) count the
  * sale, credit loyalty points, re-check the tier, and issue warranties.
  */
-async function applyDelivery(order: any, orderId: string, previousStatus: string) {
+async function applyDelivery(
+  order: any,
+  orderId: string,
+  previousStatus: string,
+  session?: ClientSession
+) {
   await Transaction.updateMany(
     { orderId, status: { $ne: "success" } },
-    { $set: { status: "success" } }
+    { $set: { status: "success" } },
+    { session }
   );
 
   if (previousStatus === "delivered") return;
@@ -166,27 +179,31 @@ async function applyDelivery(order: any, orderId: string, previousStatus: string
   for (const item of order.items || []) {
     const productId = orderItemProductId(item);
     if (productId && item.quantity) {
-      await Product.findByIdAndUpdate(productId, { $inc: { sellCount: item.quantity } });
+      await Product.findByIdAndUpdate(
+        productId,
+        { $inc: { sellCount: item.quantity } },
+        { session }
+      );
     }
   }
 
   const updatedUser = await User.findByIdAndUpdate(
     order.userId,
     { $inc: { points: order.pointsEarned } },
-    { new: true }
+    { new: true, session }
   );
 
   if (updatedUser) {
     const points  = typeof updatedUser.points === "number" && !isNaN(updatedUser.points) ? updatedUser.points : 0;
     const newTier = getMembershipTier(points);
     if (updatedUser.member !== newTier) {
-      await User.findByIdAndUpdate(order.userId, { $set: { member: newTier } });
+      await User.findByIdAndUpdate(order.userId, { $set: { member: newTier } }, { session });
     }
   }
 
   // Idempotent — one warranty per (user, product, order).
   try {
-    await createWarrantiesForOrder(orderId, order.userId.toString(), order.items || []);
+    await createWarrantiesForOrder(orderId, order.userId.toString(), order.items || [], session);
   } catch (warrantyErr) {
     console.error("[WARRANTY] Failed to create warranties for order", orderId, warrantyErr);
   }
@@ -199,46 +216,51 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
     throw new ApiError(400, "Transaction ID required for wallet payments");
   }
 
+  // Pricing only reads, so it stays outside the transaction.
   const { orderItems, subtotal } = await buildOrderItems(data.items);
   const shipping = await resolveShipping(subtotal, data.shippingMethod);
 
   const totalAmount  = subtotal + shipping.fee;
   const pointsEarned = Math.floor(subtotal * POINTS_PER_DOLLAR);
 
-  // Save order
-  const order = await Order.create({
-    userId,
-    items: orderItems,
-    shippingAddress: data.shippingAddress,
-    paymentMethod: data.paymentMethod,
-    subtotal,
-    shippingFee: shipping.fee,
-    totalAmount,
-    shippingMethod: shipping.method,
-    estimatedDelivery: shipping.estimatedDelivery,
-    pointsEarned,
+  // The order, its payment row, its first timeline entry, the stock decrement
+  // and the cart reset are one unit of work: either all of them land or none.
+  return withTransaction(async (session) => {
+    const order = new Order({
+      userId,
+      items: orderItems,
+      shippingAddress: data.shippingAddress,
+      paymentMethod: data.paymentMethod,
+      subtotal,
+      shippingFee: shipping.fee,
+      totalAmount,
+      shippingMethod: shipping.method,
+      estimatedDelivery: shipping.estimatedDelivery,
+      pointsEarned,
+    });
+    await order.save({ session });
+
+    const orderId = order._id.toString();
+
+    const reference = data.paymentMethod === "cod" ? `COD-${orderId}` : data.transactionId!;
+    await createTransaction(
+      { orderId, userId, method: data.paymentMethod, amount: totalAmount, reference },
+      session
+    );
+
+    await logOrderStatus(orderId, "processing", { session });
+
+    for (const item of data.items) {
+      await Product.findByIdAndUpdate(
+        item.productId,
+        { $inc: { stockQuantity: -item.quantity } },
+        { session }
+      );
+    }
+    await Cart.deleteMany({ userId }, { session });
+
+    return order;
   });
-
-  // Create transaction record
-  const reference = data.paymentMethod === "cod" ? `COD-${order._id}` : data.transactionId!;
-  await createTransaction({
-    orderId:  order._id.toString(),
-    userId,
-    method:   data.paymentMethod,
-    amount:   totalAmount,
-    reference,
-  });
-
-  // Log initial status
-  await logOrderStatus(order._id.toString(), "processing");
-
-  // Deduct stock and clear cart
-  for (const item of data.items) {
-    await Product.findByIdAndUpdate(item.productId, { $inc: { stockQuantity: -item.quantity } });
-  }
-  await Cart.deleteMany({ userId });
-
-  return order;
 }
 
 // ─── Get Orders ───────────────────────────────────────────────────────────────
@@ -300,30 +322,39 @@ export async function getOrderById(id: string) {
 // ─── Update Order Status (Admin) ──────────────────────────────────────────────
 
 export async function updateOrderStatus(id: string, data: UpdateOrderStatusInput) {
-  const order = await Order.findById(id);
-  if (!order) throw new ApiError(404, "Order not found");
+  // The status write, the timeline entry and the settlement side effects must
+  // not be left half-applied if one of them fails.
+  return withTransaction(async (session) => {
+    // Reads need the explicit session, otherwise they may see data from
+    // before the transaction started. Writes just take a `{ session }` option,
+    // which is harmless when there is no session.
+    const order = session
+      ? await Order.findById(id).session(session)
+      : await Order.findById(id);
+    if (!order) throw new ApiError(404, "Order not found");
 
-  // Cannot cancel a shipped order until the customer has responded
-  if (order.orderStatus === "shipped" && data.orderStatus === "cancelled" && !order.customerResponse) {
-    throw new ApiError(400, "Customer must respond before a shipped order can be cancelled");
-  }
+    // Cannot cancel a shipped order until the customer has responded
+    if (order.orderStatus === "shipped" && data.orderStatus === "cancelled" && !order.customerResponse) {
+      throw new ApiError(400, "Customer must respond before a shipped order can be cancelled");
+    }
 
-  const updated = await Order.findByIdAndUpdate(id, data, { new: true });
-  if (!updated) throw new ApiError(404, "Order not found");
+    const updated = await Order.findByIdAndUpdate(id, data, { new: true, session });
+    if (!updated) throw new ApiError(404, "Order not found");
 
-  await logOrderStatus(id, data.orderStatus);
+    await logOrderStatus(id, data.orderStatus, { session });
 
-  // Settle the side effects of the new status. These need the *previous*
-  // status, which is why the original document is kept around.
-  if (data.orderStatus === "cancelled") {
-    await applyCancellation(order, id);
-  }
+    // Settle the side effects of the new status. These need the *previous*
+    // status, which is why the original document is kept around.
+    if (data.orderStatus === "cancelled") {
+      await applyCancellation(order, id, session);
+    }
 
-  if (data.orderStatus === "delivered") {
-    await applyDelivery(updated, id, order.orderStatus);
-  }
+    if (data.orderStatus === "delivered") {
+      await applyDelivery(updated, id, order.orderStatus, session);
+    }
 
-  return updated;
+    return updated;
+  });
 }
 
 // ─── Customer Order Response ───────────────────────────────────────────────────
@@ -348,7 +379,9 @@ export async function updateCustomerResponse(
   await order.save();
 
   const noteLog = data.note ? ` - "${data.note}"` : "";
-  await logOrderStatus(id, order.orderStatus, `Customer response: ${data.response}${noteLog}`);
+  await logOrderStatus(id, order.orderStatus, {
+    note: `Customer response: ${data.response}${noteLog}`,
+  });
 
   return order;
 }

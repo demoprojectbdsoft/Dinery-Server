@@ -1,3 +1,4 @@
+import { ClientSession } from "mongoose";
 import { Warranty } from "./warranty.model";
 import { Product } from "../product/product.model";
 import { ApiError } from "../../utils/apiError";
@@ -44,30 +45,31 @@ function withEffectiveStatus<T extends { status?: string; expiryDate?: any }>(w:
 export async function createWarrantiesForOrder(
   orderId: string,
   userId: string,
-  items: { productId: any; quantity?: number }[]
+  items: { productId: any; quantity?: number }[],
+  session?: ClientSession
 ): Promise<number> {
   let created = 0;
   for (const item of items || []) {
     const productId = refIdString(item?.productId);
     if (!productId) continue;
 
-    const product = await Product.findById(productId).lean();
+    const product = session
+      ? await Product.findById(productId).session(session).lean()
+      : await Product.findById(productId).lean();
     if (!product) continue;
     const months = product.warrantyPeriodMonths;
     if (!months || months <= 0) continue;
 
     // One warranty per (user, product, order) — never duplicate on re-delivery.
-    const existing = await Warranty.findOne({
-      userId,
-      productId,
-      orderId,
-    });
+    const existing = session
+      ? await Warranty.findOne({ userId, productId, orderId }).session(session)
+      : await Warranty.findOne({ userId, productId, orderId });
     if (existing) continue;
 
     const activationDate = new Date();
     const expiryDate = addMonthsClamped(activationDate, months);
 
-    await Warranty.create({
+    const warranty = new Warranty({
       userId,
       productId,
       orderId,
@@ -75,6 +77,7 @@ export async function createWarrantiesForOrder(
       expiryDate,
       status: "active",
     });
+    await warranty.save({ session });
     created++;
   }
   return created;
@@ -99,13 +102,17 @@ export async function expireStaleWarranties(): Promise<number> {
  * delivered order is cancelled or returned, so the customer cannot keep
  * claiming coverage for goods they no longer own.
  */
-export async function voidWarrantiesForOrder(orderId: string): Promise<number> {
+export async function voidWarrantiesForOrder(
+  orderId: string,
+  session?: ClientSession
+): Promise<number> {
   const result = await Warranty.updateMany(
     {
       orderId,
       status: { $in: ["active", "claim_submitted", "under_review", "info_requested"] },
     },
-    { $set: { status: "expired" } }
+    { $set: { status: "expired" } },
+    { session }
   );
   return result.modifiedCount || 0;
 }
