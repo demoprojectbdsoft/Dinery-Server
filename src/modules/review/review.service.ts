@@ -4,6 +4,7 @@ import { User } from "../user/user.model";
 import { Product } from "../product/product.model";
 import { CreateReviewInput, UpdateReviewInput, GetReviewsQuery } from "./review.validator";
 import { ApiError } from "../../utils/apiError";
+import { assertOwnerOrAdmin } from "../../utils/authz";
 import { idQuery } from "../../utils/ids";
 import { isAdminRole } from "../../utils/roles";
 
@@ -182,7 +183,7 @@ export async function updateReview(
   }
 
   // Only the reviewer themselves can edit their own review
-  if (requesterId && review.userId.toString() !== requesterId) {
+  if (String(review.userId) !== String(requesterId)) {
     throw new ApiError(403, "You can only edit your own reviews.");
   }
 
@@ -194,6 +195,12 @@ export async function updateReview(
   return formatReview(updated, (updated as any).userId, (updated as any).productId);
 }
 
-export async function deleteReview(id: string) {
+export async function deleteReview(id: string, requester?: { id?: string; role?: string }) {
+  const review = await ProductReview.findById(id);
+  if (!review) throw new ApiError(404, "Review not found");
+
+  // The reviewer can remove their own review; an admin can moderate any review.
+  assertOwnerOrAdmin(review.userId, requester, "You can only delete your own reviews.");
+
   await ProductReview.findByIdAndDelete(id);
 }

@@ -3,6 +3,7 @@ import { apiResponse } from "../../utils/apiResponse";
 import { ApiError } from "../../utils/apiError";
 import { parseQuery } from "../../utils/validate";
 import { isAdminRole } from "../../utils/roles";
+import { assertOwnerOrAdmin } from "../../utils/authz";
 import * as userService from "./user.service";
 import {
   ADMIN_ONLY_USER_FIELDS,
@@ -20,6 +21,7 @@ export const getUsers = catchAsync(async (req, res) => {
 
 export const getUserById = catchAsync(async (req, res) => {
   const user = await userService.getUserById(req.params.id as string);
+  assertOwnerOrAdmin(user._id, req.user, "You are not allowed to view this profile");
   apiResponse(res, 200, user);
 });
 

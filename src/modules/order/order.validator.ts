@@ -21,7 +21,7 @@ const shippingAddressSchema = z.object({
 
 export const createOrderSchema = z
   .object({
-    userId: objectId,
+    // The buyer is the caller: the id comes from the token, not the body.
     items: z.array(orderItemInputSchema).min(1, "Order must have at least one item"),
     shippingAddress: shippingAddressSchema.optional(),
     paymentMethod: z.enum(["cod", "bkash", "rocket", "nagad"]),

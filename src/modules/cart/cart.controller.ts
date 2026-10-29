@@ -1,47 +1,49 @@
 import { catchAsync } from "../../utils/catchAsync";
 import { apiResponse } from "../../utils/apiResponse";
 import { ApiError } from "../../utils/apiError";
+import { currentUserId } from "../../utils/authz";
 import * as cartService from "./cart.service";
 
-export const getCart = catchAsync(async (req, res) => {
-  const userId = (req.query.userId || req.params.userId) as string;
-  if (!userId) throw new ApiError(400, "userId is required");
+/**
+ * A cart always belongs to whoever is signed in. The `userId` that clients used
+ * to send is ignored, so it can no longer address another account.
+ */
 
-  const cart = await cartService.getCartByUserId(userId);
+export const getCart = catchAsync(async (req, res) => {
+  const cart = await cartService.getCartByUserId(currentUserId(req.user));
   apiResponse(res, 200, cart, "Cart fetched successfully");
 });
 
 export const addToCart = catchAsync(async (req, res) => {
-  const { userId, productId, quantity } = req.body;
-  const item = await cartService.addToCart(userId, productId, quantity);
+  const { productId, quantity } = req.body;
+  const item = await cartService.addToCart(currentUserId(req.user), productId, quantity);
   apiResponse(res, 201, item, "Added to cart");
 });
 
 export const updateCartItem = catchAsync(async (req, res) => {
-  const { userId, quantity } = req.body;
-  const item = await cartService.updateCartItem(userId, req.params.productId as string, quantity);
+  const { quantity } = req.body;
+  const item = await cartService.updateCartItem(
+    currentUserId(req.user),
+    req.params.productId as string,
+    quantity
+  );
   apiResponse(res, 200, item, "Cart updated");
 });
 
 export const removeFromCart = catchAsync(async (req, res) => {
-  const userId = (req.body?.userId || req.query?.userId) as string;
-  if (!userId) throw new ApiError(400, "userId is required");
-  await cartService.removeFromCart(userId, req.params.productId as string);
+  await cartService.removeFromCart(currentUserId(req.user), req.params.productId as string);
   apiResponse(res, 200, null, "Removed from cart");
 });
 
 export const clearCart = catchAsync(async (req, res) => {
-  const userId = (req.body?.userId || req.query?.userId) as string;
-  if (!userId) throw new ApiError(400, "userId is required");
-  await cartService.clearCart(userId);
+  await cartService.clearCart(currentUserId(req.user));
   apiResponse(res, 200, null, "Cart cleared");
 });
 
 export const isCarted = catchAsync(async (req, res) => {
-  const userId = (req.query.userId || req.params.userId || req.body?.userId) as string;
-  const productId = (req.query.productId || req.params.productId || req.body?.productId) as string;
-  if (!userId || !productId) throw new ApiError(400, "userId and productId are required");
+  const productId = (req.query.productId || req.params.productId) as string;
+  if (!productId) throw new ApiError(400, "productId is required");
 
-  const result = await cartService.isCarted(userId, productId);
+  const result = await cartService.isCarted(currentUserId(req.user), productId);
   apiResponse(res, 200, result, "Cart status fetched successfully");
 });

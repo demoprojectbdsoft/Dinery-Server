@@ -4,6 +4,7 @@ import { Cart } from "../cart/cart.model";
 import { User } from "../user/user.model";
 import { Transaction } from "../transaction/transaction.model";
 import { ApiError } from "../../utils/apiError";
+import { assertOwnerOrAdmin } from "../../utils/authz";
 import { CreateOrderInput, UpdateOrderStatusInput, CustomerResponseInput, GetOrdersQuery } from "./order.validator";
 import { logOrderStatus } from "../order-status/order-status.service";
 import { createTransaction, getLatestTransactionForOrder } from "../transaction/transaction.service";
@@ -193,7 +194,7 @@ async function applyDelivery(order: any, orderId: string, previousStatus: string
 
 // ─── Create Order ─────────────────────────────────────────────────────────────
 
-export async function createOrder(data: CreateOrderInput) {
+export async function createOrder(data: CreateOrderInput, userId: string) {
   if (data.paymentMethod !== "cod" && !data.transactionId) {
     throw new ApiError(400, "Transaction ID required for wallet payments");
   }
@@ -206,7 +207,7 @@ export async function createOrder(data: CreateOrderInput) {
 
   // Save order
   const order = await Order.create({
-    userId: data.userId,
+    userId,
     items: orderItems,
     shippingAddress: data.shippingAddress,
     paymentMethod: data.paymentMethod,
@@ -222,7 +223,7 @@ export async function createOrder(data: CreateOrderInput) {
   const reference = data.paymentMethod === "cod" ? `COD-${order._id}` : data.transactionId!;
   await createTransaction({
     orderId:  order._id.toString(),
-    userId:   data.userId,
+    userId,
     method:   data.paymentMethod,
     amount:   totalAmount,
     reference,
@@ -235,7 +236,7 @@ export async function createOrder(data: CreateOrderInput) {
   for (const item of data.items) {
     await Product.findByIdAndUpdate(item.productId, { $inc: { stockQuantity: -item.quantity } });
   }
-  await Cart.deleteMany({ userId: data.userId });
+  await Cart.deleteMany({ userId });
 
   return order;
 }
@@ -330,15 +331,12 @@ export async function updateOrderStatus(id: string, data: UpdateOrderStatusInput
 export async function updateCustomerResponse(
   id: string,
   data: CustomerResponseInput,
-  userId?: string,
-  userRole?: string
+  requester?: { id?: string; role?: string }
 ) {
   const order = await Order.findById(id);
   if (!order) throw new ApiError(404, "Order not found");
 
-  if (userRole !== "admin" && userId && order.userId.toString() !== userId) {
-    throw new ApiError(403, "You are not authorized to respond to this order");
-  }
+  assertOwnerOrAdmin(order.userId, requester, "You are not authorized to respond to this order");
 
   if (order.orderStatus !== "shipped") {
     throw new ApiError(400, "Response can only be submitted when the order is shipped");

@@ -26,6 +26,6 @@ export const updateReview = catchAsync(async (req, res) => {
 });
 
 export const deleteReview = catchAsync(async (req, res) => {
-  await reviewService.deleteReview(req.params.id as string);
+  await reviewService.deleteReview(req.params.id as string, req.user);
   apiResponse(res, 200, null, "Review deleted");
 });

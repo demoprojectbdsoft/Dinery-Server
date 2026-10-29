@@ -10,6 +10,7 @@ router.use(requireAuth);
 
 router.get("/", cartController.getCart);
 router.get("/is-carted", cartController.isCarted);
+// Kept for existing callers; the :userId segment is ignored in favour of the token.
 router.get("/user/:userId", cartController.getCart);
 router.post("/", validate(addToCartSchema), cartController.addToCart);
 router.patch("/:productId", validate(updateCartItemSchema), cartController.updateCartItem);

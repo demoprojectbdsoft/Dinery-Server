@@ -3,14 +3,13 @@ import { objectIdSchema } from "../../utils/ids";
 
 const objectId = objectIdSchema("Invalid ID");
 
+// The owner of the cart is taken from the auth token, never the body.
 export const addToCartSchema = z.object({
-  userId: objectId,
   productId: objectId,
   quantity: z.number().int().min(1).default(1),
 });
 
 export const updateCartItemSchema = z.object({
-  userId: objectId,
   quantity: z.number().int().min(1, "Quantity must be at least 1"),
 });
 
