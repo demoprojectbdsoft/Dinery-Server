@@ -199,7 +199,9 @@ export async function submitClaim(
   }
 
   warranty.status = "claim_submitted";
-  warranty.claimProblem = data.problem;
+  // Optional: only stored when the caller sent a code, so a claim made from the
+  // current form leaves the field empty instead of saving `undefined`.
+  if (data.problem) warranty.claimProblem = data.problem;
   warranty.claimReason = data.reason;
   warranty.claimDescription = data.description;
   warranty.claimImages = data.images || [];

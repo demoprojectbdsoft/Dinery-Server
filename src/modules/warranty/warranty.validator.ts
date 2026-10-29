@@ -25,9 +25,9 @@ export const CLAIM_PROBLEM_VALUES = [
  */
 export const submitWarrantyClaimSchema = z.object({
   warrantyId: objectId,
-  problem: z.enum(CLAIM_PROBLEM_VALUES, {
-    message: "Choose what went wrong with the product",
-  }),
+  // Kept optional: the claim form no longer asks for it, but older clients and
+  // existing records still carry a code from CLAIM_PROBLEM_VALUES.
+  problem: z.enum(CLAIM_PROBLEM_VALUES, { message: "Choose what went wrong with the product" }).optional(),
   reason: z.string().min(1, "Reason is required").max(200),
   description: z.string().min(1, "Description is required").max(2000),
   images: z.array(z.string().url()).max(5, "Maximum 5 images per claim").optional().default([]),

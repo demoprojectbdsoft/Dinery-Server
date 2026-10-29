@@ -222,7 +222,7 @@ Both routers apply `requireAuth` to every route. The `:userId` path variants are
 |---|---|---|---|
 | `GET` | `/warranties/mine` | Bearer | The caller's coverage records |
 | `GET` | `/warranties/order/:orderId/product/:productId` | Bearer | Coverage for one order line |
-| `POST` | `/warranties/claim/:id` | Bearer | Customer files a claim (`problem`, `reason`, `description`, up to 5 images) |
+| `POST` | `/warranties/claim/:id` | Bearer | Customer files a claim (`reason`, `description`, up to 5 images; optional `problem`) |
 | `GET` | `/warranties` | Admin | All warranties, filterable |
 | `PATCH` | `/warranties/claim/:id` | Admin | `mark_under_review`, `request_info`, `resolve`, `reject` |
 
@@ -326,7 +326,7 @@ Tiers      silver < 1,000 · gold 1,000 · platinum 4,000 · diamond 10,000
 - A warranty is created **only on delivery**, one per order line, using the product's `warrantyPeriodMonths`, `warrantyType` and `warrantyTerms`.
 - Those three values are **copied onto the record** at creation. The claim screens read the live product when it still exists and fall back to the copy otherwise, so coverage survives a product edit or delete.
 - Statuses: `active` → `claim_submitted` → `under_review` / `info_requested` → `resolved`, plus `expired`.
-- A customer can file one claim per warranty with a `problem` code, a reason, a description and up to 5 images. `problem` must be one of `not_working`, `stopped_working`, `damaged_on_arrival`, `battery_issue`, `display_issue`, `missing_parts`, `other`, so an unknown value is rejected by the validator.
+- A customer can file one claim per warranty with a reason, a description and up to 5 images. `problem` is still accepted but optional — when sent it must be one of `not_working`, `stopped_working`, `damaged_on_arrival`, `battery_issue`, `display_issue`, `missing_parts`, `other`, and it is only saved if present. Claims filed before the form was simplified keep their code.
 - An admin then moves the claim forward with a note or a resolution. `reject` closes the warranty as `expired`.
 - A daily job (`expireStaleWarranties`) marks every warranty whose expiry date has passed as `expired`.
 - Cancelling an order voids the coverage it created.
@@ -521,7 +521,7 @@ The schedule is UTC (about 2 AM Asia/Dhaka). On Vercel's Hobby plan a cron runs 
 | Orders, status flow, status history | ✅ Complete |
 | Payments & transactions | ✅ Complete (simulated gateway) |
 | Loyalty points — earning, redemption, refunds, tiers | ✅ Complete |
-| Warranties — issuance with copied terms, problem-coded claims, admin review, expiry | ✅ Complete |
+| Warranties — issuance with copied terms, claims, admin review, expiry | ✅ Complete |
 | Reviews & rating recalculation | ✅ Complete |
 | Store settings, branding, About page copy & opening hours | ✅ Complete |
 | Demo admin sandbox with daily restore | ✅ Complete |
