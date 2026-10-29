@@ -4,10 +4,47 @@ import { User } from "../user/user.model";
 import { Product } from "../product/product.model";
 import { CreateReviewInput, UpdateReviewInput, GetReviewsQuery } from "./review.validator";
 import { ApiError } from "../../utils/apiError";
+import { idQuery } from "../../utils/ids";
+import { isAdminRole } from "../../utils/roles";
 
-// Converts a string ID into a filter that matches both string and ObjectId forms in MongoDB
-function toIdQuery(id: string) {
-  return Types.ObjectId.isValid(id) ? { $in: [id, new Types.ObjectId(id)] } : id;
+/** Sort options exposed by the reviews list. */
+function sortStageFor(sort?: string) {
+  switch (sort) {
+    case "oldest":
+      return { createdAt: 1 };
+    case "rating_high":
+      return { rating: -1, createdAt: -1 };
+    case "rating_low":
+      return { rating: 1, createdAt: -1 };
+    default:
+      return { createdAt: -1 }; // newest
+  }
+}
+
+/**
+ * Loads every reviewer and product referenced by one page of reviews in two
+ * queries, so rendering a review never triggers its own lookups.
+ */
+async function loadReviewContext(reviews: any[]) {
+  const userIds = reviews
+    .map((r) => {
+      const uid = r.userId?.toString();
+      return Types.ObjectId.isValid(uid) ? new Types.ObjectId(uid) : null;
+    })
+    .filter(Boolean);
+  const users = await User.find({ _id: { $in: userIds } }).lean();
+  const userMap = new Map(users.map((u: any) => [u._id.toString(), u]));
+
+  const productIds = reviews
+    .map((r) => {
+      const pid = r.productId?.toString();
+      return Types.ObjectId.isValid(pid) ? new Types.ObjectId(pid) : null;
+    })
+    .filter(Boolean);
+  const products = await Product.find({ _id: { $in: productIds } }).lean();
+  const productMap = new Map(products.map((p: any) => [p._id.toString(), p]));
+
+  return { userMap, productMap };
 }
 
 // Shapes a raw review doc + user + product into the API response format
@@ -35,15 +72,11 @@ export async function getReviews(query: GetReviewsQuery) {
 
   // Build base filter — only add fields if provided
   const filter: any = {};
-  if (productId) filter.productId = toIdQuery(productId);
-  if (userId) filter.userId = toIdQuery(userId);
+  if (productId) filter.productId = idQuery(productId);
+  if (userId) filter.userId = idQuery(userId);
   if (rating) filter.rating = rating;
 
-  // Determine sort order
-  let sortStage: any = { createdAt: -1 }; // default: newest
-  if (sort === "oldest") sortStage = { createdAt: 1 };
-  else if (sort === "rating_high") sortStage = { rating: -1, createdAt: -1 };
-  else if (sort === "rating_low") sortStage = { rating: 1, createdAt: -1 };
+  const sortStage: any = sortStageFor(sort);
 
   const skip = (page - 1) * limit;
 
@@ -106,25 +139,8 @@ export async function getReviews(query: GetReviewsQuery) {
     ProductReview.countDocuments(filter),
   ]);
 
-  // Fetch all reviewer user docs in one query, then map by ID for O(1) lookup
-  const userIds = reviews
-    .map((r: any) => {
-      const uid = r.userId?.toString();
-      return Types.ObjectId.isValid(uid) ? new Types.ObjectId(uid) : null;
-    })
-    .filter(Boolean);
-  const users = await User.find({ _id: { $in: userIds } }).lean();
-  const userMap = new Map(users.map((u: any) => [u._id.toString(), u]));
-
-  // Fetch all product docs in one query, then map by ID for O(1) lookup
-  const productIds = reviews
-    .map((r: any) => {
-      const pid = r.productId?.toString();
-      return Types.ObjectId.isValid(pid) ? new Types.ObjectId(pid) : null;
-    })
-    .filter(Boolean);
-  const products = await Product.find({ _id: { $in: productIds } }).lean();
-  const productMap = new Map(products.map((p: any) => [p._id.toString(), p]));
+  // Attach reviewer + product details with two batched lookups
+  const { userMap, productMap } = await loadReviewContext(reviews);
 
   return {
     reviews: reviews.map((r: any) =>
@@ -161,8 +177,7 @@ export async function updateReview(
   if (!review) throw new ApiError(404, "Review not found");
 
   // Admins cannot submit (and therefore cannot edit) reviews
-  const role = (requesterRole || "").toLowerCase();
-  if (role === "admin" || role === "demoadmin") {
+  if (isAdminRole(requesterRole)) {
     throw new ApiError(403, "Admins cannot edit reviews.");
   }
 

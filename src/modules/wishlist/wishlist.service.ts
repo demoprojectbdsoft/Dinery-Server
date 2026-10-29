@@ -2,6 +2,7 @@ import { Wishlist } from "./wishlist.model";
 import { Product } from "../product/product.model";
 import { User } from "../user/user.model";
 import { ApiError } from "../../utils/apiError";
+import { isAdminRole } from "../../utils/roles";
 
 // Fetches user wishlist and returns items along with totalItems count
 export async function getWishlistByUserId(userId: string) {
@@ -15,7 +16,7 @@ export async function getWishlistByUserId(userId: string) {
 
 export async function addToWishlist(userId: string, productId: string) {
   const user = await User.findById(userId);
-  if (user && ((user.role || "").toLowerCase() === "admin" || (user.role || "").toLowerCase() === "demoadmin")) {
+  if (user && isAdminRole(user.role)) {
     throw new ApiError(403, "Admins cannot add products to wishlist");
   }
 
@@ -38,4 +39,4 @@ export async function removeFromWishlist(userId: string, productId: string) {
 export async function isWishlisted(userId: string, productId: string) {
   const item = await Wishlist.findOne({ userId, productId });
   return { isWishlisted: !!item };
-}
+}

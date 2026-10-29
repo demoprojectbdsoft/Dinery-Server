@@ -1,6 +1,6 @@
 import { catchAsync } from "../../utils/catchAsync";
 import { apiResponse } from "../../utils/apiResponse";
-import { ApiError } from "../../utils/apiError";
+import { parseQuery } from "../../utils/validate";
 import * as reviewService from "./review.service";
 import { getReviewsQuerySchema } from "./review.validator";
 
@@ -9,15 +9,11 @@ export const createReview = catchAsync(async (req, res) => {
   apiResponse(res, 201, review, "Review added");
 });
 
-export const getReviews = catchAsync(async (req, res, next) => {
-  const parsed = getReviewsQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    return next(new ApiError(400, parsed.error.issues[0].message));
-  }
-  const result = await reviewService.getReviews(parsed.data);
+export const getReviews = catchAsync(async (req, res) => {
+  const query = parseQuery(getReviewsQuerySchema, req.query);
+  const result = await reviewService.getReviews(query);
   apiResponse(res, 200, result, "Reviews fetched successfully");
 });
-
 
 export const updateReview = catchAsync(async (req, res) => {
   const review = await reviewService.updateReview(

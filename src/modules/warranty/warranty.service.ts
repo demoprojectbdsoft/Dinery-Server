@@ -1,11 +1,38 @@
 import { Warranty } from "./warranty.model";
 import { Product } from "../product/product.model";
 import { ApiError } from "../../utils/apiError";
+import { refIdString } from "../../utils/ids";
 import {
   SubmitWarrantyClaimInput,
   AdminUpdateClaimInput,
   GetWarrantiesQuery,
 } from "./warranty.validator";
+
+/**
+ * Add `months` calendar months to a date, clamped to the last valid day of the
+ * target month so that e.g. Jan 31 + 1 month lands on Feb 28/29 (not Mar 3).
+ */
+function addMonthsClamped(from: Date, months: number): Date {
+  const target = new Date(from);
+  const day = target.getDate();
+  target.setDate(1);
+  target.setMonth(target.getMonth() + months);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(day, lastDay));
+  return target;
+}
+
+/**
+ * Report an "active" warranty that has already passed its expiry date as
+ * expired. The status column is only rewritten by the daily sweep, so this
+ * keeps responses honest on hosts where the sweep has not run yet.
+ */
+function withEffectiveStatus<T extends { status?: string; expiryDate?: any }>(w: T): T {
+  if (w?.status === "active" && w.expiryDate && new Date(w.expiryDate) < new Date()) {
+    return { ...w, status: "expired" };
+  }
+  return w;
+}
 
 /**
  * Create warranty records for every item in a delivered order that has a
@@ -21,10 +48,7 @@ export async function createWarrantiesForOrder(
 ): Promise<number> {
   let created = 0;
   for (const item of items || []) {
-    const productId =
-      typeof item?.productId === "object" && item?.productId !== null && "_id" in item?.productId
-        ? (item?.productId as any)._id
-        : item?.productId;
+    const productId = refIdString(item?.productId);
     if (!productId) continue;
 
     const product = await Product.findById(productId).lean();
@@ -41,8 +65,7 @@ export async function createWarrantiesForOrder(
     if (existing) continue;
 
     const activationDate = new Date();
-    const expiryDate = new Date(activationDate);
-    expiryDate.setMonth(expiryDate.getMonth() + months);
+    const expiryDate = addMonthsClamped(activationDate, months);
 
     await Warranty.create({
       userId,
@@ -65,6 +88,22 @@ export async function expireStaleWarranties(): Promise<number> {
     {
       status: "active",
       expiryDate: { $lte: new Date() },
+    },
+    { $set: { status: "expired" } }
+  );
+  return result.modifiedCount || 0;
+}
+
+/**
+ * Close out every open warranty that belongs to an order. Called when a
+ * delivered order is cancelled or returned, so the customer cannot keep
+ * claiming coverage for goods they no longer own.
+ */
+export async function voidWarrantiesForOrder(orderId: string): Promise<number> {
+  const result = await Warranty.updateMany(
+    {
+      orderId,
+      status: { $in: ["active", "claim_submitted", "under_review", "info_requested"] },
     },
     { $set: { status: "expired" } }
   );
@@ -119,7 +158,7 @@ export async function getWarranties(query: GetWarrantiesQuery) {
   ]);
 
   return {
-    warranties,
+    warranties: warranties.map((w) => withEffectiveStatus(w)),
     pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
   };
 }
@@ -197,26 +236,11 @@ export async function adminUpdateClaim(
 }
 
 function formatWarranty(w: any) {
-  const productId =
-    w &&
-    w?.productId &&
-    typeof w?.productId === "object" &&
-    "_id" in w?.productId
-      ? (w?.productId as any)._id.toString()
-      : w?.productId?.toString?.() ?? w?.productId?.toString?.();
-  const orderId =
-    w &&
-    w?.orderId &&
-    typeof w?.orderId === "object" &&
-    "_id" in w?.orderId
-      ? (w?.orderId as any)._id.toString()
-      : w?.orderId?.toString?.() ?? w?.orderId?.toString?.();
-
-  return {
+  return withEffectiveStatus({
     id: w._id.toString(),
-    userId: w?.userId?.toString?.() ?? w?.userId?.toString?.(),
-    productId,
-    orderId,
+    userId: w?.userId?.toString?.(),
+    productId: refIdString(w?.productId),
+    orderId: refIdString(w?.orderId),
     activationDate: w.activationDate,
     expiryDate: w.expiryDate,
     status: w.status,
@@ -225,5 +249,5 @@ function formatWarranty(w: any) {
     claimImages: Array.isArray(w.claimImages) ? w.claimImages : [],
     claimAdminNote: w.claimAdminNote,
     resolutionDetails: w.resolutionDetails,
-  };
+  });
 }

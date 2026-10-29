@@ -1,15 +1,12 @@
 import { catchAsync } from "../../utils/catchAsync";
 import { apiResponse } from "../../utils/apiResponse";
-import { ApiError } from "../../utils/apiError";
+import { parseQuery } from "../../utils/validate";
 import * as userService from "./user.service";
 import { getUsersQuerySchema } from "./user.validator";
 
-export const getUsers = catchAsync(async (req, res, next) => {
-  const parsed = getUsersQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    return next(new ApiError(400, parsed.error.issues[0].message));
-  }
-  const result = await userService.getUsers(parsed.data);
+export const getUsers = catchAsync(async (req, res) => {
+  const query = parseQuery(getUsersQuerySchema, req.query);
+  const result = await userService.getUsers(query);
   apiResponse(res, 200, result, "Users fetched successfully");
 });
 

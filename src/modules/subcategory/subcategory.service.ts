@@ -1,8 +1,8 @@
-import { Types } from "mongoose";
 import { SubCategory } from "./subcategory.model";
 import { Category } from "../category/category.model";
 import { Product } from "../product/product.model";
 import { ApiError } from "../../utils/apiError";
+import { idVariants } from "../../utils/ids";
 import { CreateSubCategoryInput, UpdateSubCategoryInput } from "./subcategory.validator";
 
 export async function createSubCategory(data: CreateSubCategoryInput) {
@@ -29,8 +29,7 @@ export async function updateSubCategory(id: string, data: UpdateSubCategoryInput
 
 export async function deleteSubCategory(id: string) {
   // Block delete if any products are linked to this subcategory
-  const idObj = Types.ObjectId.isValid(id) ? new Types.ObjectId(id) : null;
-  const subMatches: any[] = idObj ? [id, idObj] : [id];
+  const subMatches = idVariants(id);
 
   const productCount = await Product.countDocuments({
     subCategoryIds: { $in: subMatches },

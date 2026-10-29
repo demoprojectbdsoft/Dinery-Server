@@ -1,10 +1,19 @@
-import { Types } from "mongoose";
 import { Product } from "./product.model";
 import { ProductReview } from "../review/review.model";
 import { Category } from "../category/category.model";
 import { SubCategory } from "../subcategory/subcategory.model";
 import { ApiError } from "../../utils/apiError";
+import { idVariants } from "../../utils/ids";
 import { CreateProductInput, UpdateProductInput, GetProductsQuery } from "./product.validator";
+
+/** Sort keys the shop and dashboards can ask for. */
+const SORT_OPTIONS: Record<string, Record<string, 1 | -1>> = {
+  price_asc: { price: 1 },
+  price_desc: { price: -1 },
+  rating: { rating: -1 },
+  featured: { isFeatured: -1, createdAt: -1 },
+  newest: { createdAt: -1 },
+};
 
 // Escapes regex special chars so user search input matches literally
 function escapeRegex(str: string) {
@@ -14,16 +23,8 @@ function escapeRegex(str: string) {
 // Fetches avg rating + review count for a batch of products in ONE query.
 // Returns a Map<productIdString, { avgRating, count }> for fast O(1) lookup.
 async function getRatingsMap(productIds: string[]) {
-  const objectIds = productIds.filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id));
   const stats = await ProductReview.aggregate([
-    {
-      $match: {
-        $or: [
-          { productId: { $in: productIds } },
-          { productId: { $in: objectIds } },
-        ],
-      },
-    },
+    { $match: { productId: { $in: productIds.flatMap((id) => idVariants(id)) } } },
     { $group: { _id: { $toString: "$productId" }, avgRating: { $avg: "$rating" }, count: { $sum: 1 } } },
   ]);
   return new Map(stats.map((s) => [s._id, s]));
@@ -118,119 +119,127 @@ export async function createProduct(data: CreateProductInput) {
   return formatProduct(product);
 }
 
-export async function getProducts(query: GetProductsQuery) {
-  const { category, subCategory, search, minPrice, maxPrice, isFeatured, inStock, sort, page, limit } = query;
+// ─── Filter builders ──────────────────────────────────────────────────────────
+
+/** Matches the linked category, or the legacy specifications.Category label. */
+async function buildCategoryCondition(category: string) {
+  const cat = await Category.findOne({ $or: [{ slug: category }, { name: category }] });
+  const catName = cat?.name || category.replace(/-/g, " ");
+  const catRegex = new RegExp(`^${escapeRegex(catName)}$`, "i");
+
+  const matches: any[] = [
+    { "specifications.Category": catRegex },
+    { "specifications.category": catRegex },
+  ];
+  if (cat) matches.push({ categoryId: cat._id });
+
+  return { $or: matches };
+}
+
+/** Matches the linked subcategory, or the legacy specifications.Subcategory label. */
+async function buildSubCategoryCondition(subCategory: string) {
+  const sub = await SubCategory.findOne({ $or: [{ slug: subCategory }, { name: subCategory }] });
+  const subName = sub?.name || subCategory.replace(/-/g, " ");
+  const subRegex = new RegExp(`^${escapeRegex(subName)}$`, "i");
+
+  const matches: any[] = [
+    { "specifications.Subcategory": subRegex },
+    { "specifications.subcategory": subRegex },
+  ];
+  if (sub) matches.push({ subCategoryIds: sub._id });
+
+  return { $or: matches };
+}
+
+/** Free-text search across title, description, badges and specifications. */
+function buildSearchCondition(search: string) {
+  const searchRegex = new RegExp(escapeRegex(search.trim()), "i");
+  return {
+    $or: [
+      { title: searchRegex },
+      { description: searchRegex },
+      { badges: searchRegex },
+      { "specifications.$**": searchRegex },
+    ],
+  };
+}
+
+function buildPriceCondition(minPrice?: number, maxPrice?: number) {
+  const priceFilter: Record<string, number> = {};
+  if (minPrice !== undefined) priceFilter.$gte = minPrice;
+  if (maxPrice !== undefined) priceFilter.$lte = maxPrice;
+  return { price: priceFilter };
+}
+
+/**
+ * Discount range filter (e.g. "0-20", "20-40").
+ * Discount% is computed on the fly from originalPrice, falling back to the
+ * stored discountPercentage field when originalPrice is not set.
+ */
+function buildDiscountCondition(query: GetProductsQuery) {
+  const [minStr, maxStr] = (query.discount || "").split("-");
+  const min = query.minDiscount ?? (minStr ? Number(minStr) : 0);
+  const max = query.maxDiscount ?? (maxStr ? Number(maxStr) : 100);
+
+  const discountExpr = {
+    $cond: [
+      { $and: [{ $gt: ["$originalPrice", "$price"] }, { $gt: ["$originalPrice", 0] }] },
+      { $round: [{ $multiply: [{ $divide: [{ $subtract: ["$originalPrice", "$price"] }, "$originalPrice"] }, 100] }, 0] },
+      { $ifNull: ["$discountPercentage", 0] },
+    ],
+  };
+  return { $expr: { $and: [{ $gte: [discountExpr, min] }, { $lte: [discountExpr, max] }] } };
+}
+
+/** Badge filter, e.g. "trending" or "popular". */
+function buildBadgeCondition(badge: string) {
+  return { badges: new RegExp(`^${escapeRegex(badge.trim())}$`, "i") };
+}
+
+/** Only products whose offer price is still lower than the original price. */
+function buildOfferCondition() {
+  return {
+    $and: [
+      { originalPrice: { $exists: true, $ne: null } },
+      { $expr: { $gt: ["$originalPrice", "$price"] } },
+      { $or: [{ offerEndDate: { $exists: false } }, { offerEndDate: null }, { offerEndDate: { $gt: new Date() } }] },
+    ],
+  };
+}
+
+/** Turns the shop query into the list of AND-ed Mongo conditions. */
+async function buildFilterConditions(query: GetProductsQuery) {
+  const { category, subCategory, search, minPrice, maxPrice, isFeatured, inStock } = query;
   const conditions: any[] = [];
 
-  // 1. Filter by category (by slug or name)
-  if (category) {
-    const cat = await Category.findOne({ $or: [{ slug: category }, { name: category }] });
-    const catName = cat?.name || category.replace(/-/g, " ");
-    const catRegex = new RegExp(`^${escapeRegex(catName)}$`, "i");
+  if (category) conditions.push(await buildCategoryCondition(category));
+  if (subCategory) conditions.push(await buildSubCategoryCondition(subCategory));
+  if (search?.trim()) conditions.push(buildSearchCondition(search));
 
-    const catOr: any[] = [
-      { "specifications.Category": catRegex },
-      { "specifications.category": catRegex },
-    ];
-    if (cat) catOr.push({ categoryId: cat._id });
-
-    conditions.push({ $or: catOr });
-  }
-
-  // 2. Filter by subcategory (by slug or name)
-  if (subCategory) {
-    const sub = await SubCategory.findOne({ $or: [{ slug: subCategory }, { name: subCategory }] });
-    const subName = sub?.name || subCategory.replace(/-/g, " ");
-    const subRegex = new RegExp(`^${escapeRegex(subName)}$`, "i");
-
-    const subOr: any[] = [
-      { "specifications.Subcategory": subRegex },
-      { "specifications.subcategory": subRegex },
-    ];
-    if (sub) subOr.push({ subCategoryIds: sub._id });
-
-    conditions.push({ $or: subOr });
-  }
-
-  // 3. Search across title, description, badges, and specifications
-  if (search?.trim()) {
-    const searchRegex = new RegExp(escapeRegex(search.trim()), "i");
-    conditions.push({
-      $or: [
-        { title: searchRegex },
-        { description: searchRegex },
-        { badges: searchRegex },
-        { "specifications.$**": searchRegex },
-      ],
-    });
-  }
-
-  // 4. Price range filter
   if (minPrice !== undefined || maxPrice !== undefined) {
-    const priceFilter: Record<string, number> = {};
-    if (minPrice !== undefined) priceFilter.$gte = minPrice;
-    if (maxPrice !== undefined) priceFilter.$lte = maxPrice;
-    conditions.push({ price: priceFilter });
+    conditions.push(buildPriceCondition(minPrice, maxPrice));
   }
-
-  // 4.5. Discount range filter (e.g. "0-20", "20-40")
   if (query.discount || query.minDiscount !== undefined || query.maxDiscount !== undefined) {
-    const [minStr, maxStr] = (query.discount || "").split("-");
-    const min = query.minDiscount ?? (minStr ? Number(minStr) : 0);
-    const max = query.maxDiscount ?? (maxStr ? Number(maxStr) : 100);
-
-    // Compute discount% on-the-fly: ((originalPrice - price) / originalPrice) * 100
-    // Falls back to stored discountPercentage field if originalPrice is not set
-    const discountExpr = {
-      $cond: [
-        { $and: [{ $gt: ["$originalPrice", "$price"] }, { $gt: ["$originalPrice", 0] }] },
-        { $round: [{ $multiply: [{ $divide: [{ $subtract: ["$originalPrice", "$price"] }, "$originalPrice"] }, 100] }, 0] },
-        { $ifNull: ["$discountPercentage", 0] },
-      ],
-    };
-    conditions.push({ $expr: { $and: [{ $gte: [discountExpr, min] }, { $lte: [discountExpr, max] }] } });
+    conditions.push(buildDiscountCondition(query));
   }
 
-  // 4.6. Badge filter (e.g. "trending", "popular")
   const activeBadge = query.badge || query.badges;
-  if (activeBadge?.trim()) {
-    const badgeRegex = new RegExp(`^${escapeRegex(activeBadge.trim())}$`, "i");
-    conditions.push({ badges: badgeRegex });
-  }
+  if (activeBadge?.trim()) conditions.push(buildBadgeCondition(activeBadge));
 
-  // 5. Boolean filters
   if (isFeatured !== undefined) conditions.push({ isFeatured });
   if (inStock !== undefined) conditions.push({ inStock });
+  if (query.minRating !== undefined) conditions.push({ rating: { $gte: query.minRating } });
+  if (query.hasOffer) conditions.push(buildOfferCondition());
 
-  // 5.1. Minimum rating filter
-  if (query.minRating !== undefined) {
-    conditions.push({ rating: { $gte: query.minRating } });
-  }
+  return conditions;
+}
 
-  // 5.2. Has active offer filter (originalPrice > price AND offerEndDate is in the future or not set)
-  if (query.hasOffer) {
-    conditions.push({
-      $and: [
-        { originalPrice: { $exists: true, $ne: null } },
-        { $expr: { $gt: ["$originalPrice", "$price"] } },
-        { $or: [{ offerEndDate: { $exists: false } }, { offerEndDate: null }, { offerEndDate: { $gt: new Date() } }] },
-      ],
-    });
-  }
+export async function getProducts(query: GetProductsQuery) {
+  const { page, limit, sort } = query;
 
+  const conditions = await buildFilterConditions(query);
   const filter = conditions.length > 0 ? { $and: conditions } : {};
-
-  // 6. Sorting
-  const sortMap: Record<string, Record<string, 1 | -1>> = {
-    price_asc: { price: 1 },
-    price_desc: { price: -1 },
-    rating: { rating: -1 },
-    featured: { isFeatured: -1, createdAt: -1 },
-    newest: { createdAt: -1 },
-  };
-  const sortCriteria = sortMap[sort ?? ""] ?? { createdAt: -1 };
-
-  // 7. Pagination with populated category and subcategories
+  const sortCriteria = SORT_OPTIONS[sort ?? ""] ?? { createdAt: -1 };
   const skip = (page - 1) * limit;
 
   const [products, total] = await Promise.all([

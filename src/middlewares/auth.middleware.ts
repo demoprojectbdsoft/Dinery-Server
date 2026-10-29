@@ -5,65 +5,90 @@ import { createRemoteJWKSet, jwtVerify } from "jose-cjs";
 
 import { demoStore, isDemoAdmin } from "../modules/demo/demo.context";
 
+type AuthUser = {
+  id: string;
+  email?: string;
+  role?: string;
+};
+
 const JWKS = createRemoteJWKSet(new URL(`${ENV.NEXT_PUBLIC_CLIENT_URL}/api/auth/jwks`));
 
 declare global {
   namespace Express {
     interface Request {
-      user?: {
-        id: string;
-        email?: string;
-        role?: string;
-      };
+      user?: AuthUser;
     }
   }
 }
 
-export async function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const token = req.headers.authorization?.split(" ")[1] || (req.query.token as string);
+/** Reads the bearer token from the Authorization header or a `?token=` param. */
+function readToken(req: Request): string | undefined {
+  return req.headers.authorization?.split(" ")[1] || (req.query.token as string | undefined);
+}
 
+/** Verifies a Better-Auth JWT against the frontend's JWKS endpoint. */
+async function userFromJwt(token: string): Promise<AuthUser> {
+  const { payload } = await jwtVerify(token, JWKS, {
+    issuer: ENV.NEXT_PUBLIC_CLIENT_URL,
+  });
+
+  return {
+    id: payload.sub as string,
+    email: payload.email as string | undefined,
+    role: payload.role as string | undefined,
+  };
+}
+
+/**
+ * Fallback for callers that send a Better-Auth *session* token rather than a
+ * JWT: look the session up in the shared database and read the user behind it.
+ */
+async function userFromSession(token: string): Promise<AuthUser | null> {
+  const mongoose = (await import("mongoose")).default;
+  const db = mongoose.connection.db;
+
+  const session = await db?.collection("session").findOne({ token });
+  if (!session) return null;
+
+  const rawUserId = session.userId;
+  const objectId = mongoose.Types.ObjectId.isValid(String(rawUserId))
+    ? new mongoose.Types.ObjectId(String(rawUserId))
+    : rawUserId;
+
+  const user = await db?.collection("user").findOne({
+    $or: [{ _id: rawUserId }, { _id: objectId }],
+  });
+  if (!user) return null;
+
+  return { id: String(user._id), email: user.email, role: user.role };
+}
+
+/**
+ * Resolves the caller once, then lets the request continue. Demo admin
+ * requests are flagged for the whole request so the undo plugin can snapshot
+ * every write they make.
+ */
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const token = readToken(req);
   if (!token) {
     return next(new ApiError(401, "No token provided"));
   }
 
+  let user: AuthUser | null = null;
   try {
-    const { payload } = await jwtVerify(token, JWKS, {
-      issuer: ENV.NEXT_PUBLIC_CLIENT_URL,
-    });
-
-    req.user = {
-      id: payload.sub as string,
-      email: payload.email as string | undefined,
-      role: payload.role as string | undefined,
-    };
-
-    if (isDemoAdmin(req.user.email, req.user.role)) {
-      return demoStore.run({ demo: true }, () => next());
-    }
-    return next();
+    user = await userFromJwt(token);
   } catch {
-    // If not a JWT, check Better-Auth session in DB
-    const mongoose = (await import("mongoose")).default;
-    const db = mongoose.connection.db;
-    const session = await db?.collection("session").findOne({ token });
-    if (session) {
-      const rawUserId = session.userId;
-      const objectId = mongoose.Types.ObjectId.isValid(String(rawUserId))
-        ? new mongoose.Types.ObjectId(String(rawUserId))
-        : rawUserId;
-
-      const user = await db?.collection("user").findOne({
-        $or: [{ _id: rawUserId }, { _id: objectId }],
-      });
-
-      if (user) {
-        req.user = { id: String(user._id), email: user.email, role: user.role };
-        if (isDemoAdmin(req.user.email, req.user.role)) {
-          return demoStore.run({ demo: true }, () => next());
-        }
-        return next();
-      }
-    }
-    next(new ApiError(401, "Invalid or expired token"));
+    user = await userFromSession(token);
   }
+
+  if (!user) {
+    return next(new ApiError(401, "Invalid or expired token"));
+  }
+
+  req.user = user;
+
+  if (isDemoAdmin(user.email, user.role)) {
+    return demoStore.run({ demo: true }, () => next());
+  }
+  return next();
 }

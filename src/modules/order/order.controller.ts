@@ -1,6 +1,6 @@
 import { catchAsync } from "../../utils/catchAsync";
 import { apiResponse } from "../../utils/apiResponse";
-import { ApiError } from "../../utils/apiError";
+import { parseQuery } from "../../utils/validate";
 import * as orderService from "./order.service";
 import { getOrdersQuerySchema } from "./order.validator";
 
@@ -9,12 +9,9 @@ export const createOrder = catchAsync(async (req, res) => {
   apiResponse(res, 201, order, "Order placed successfully");
 });
 
-export const getOrders = catchAsync(async (req, res, next) => {
-  const parsed = getOrdersQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    return next(new ApiError(400, parsed.error.issues[0].message));
-  }
-  const result = await orderService.getOrders(parsed.data);
+export const getOrders = catchAsync(async (req, res) => {
+  const query = parseQuery(getOrdersQuerySchema, req.query);
+  const result = await orderService.getOrders(query);
   apiResponse(res, 200, result, "Orders fetched successfully");
 });
 

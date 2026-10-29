@@ -1,7 +1,9 @@
 import { Request, Response, NextFunction } from "express";
 import { ApiError } from "../utils/apiError";
 
-export function errorMiddleware(err: unknown, req: Request, res: Response, next: NextFunction) {
+// Express only treats a function as an error handler when it takes 4 arguments,
+// so `next` has to stay in the signature even though it is unused here.
+export function errorMiddleware(err: unknown, _req: Request, res: Response, _next: NextFunction) {
   if (err instanceof ApiError) {
     return res.status(err.statusCode).json({ success: false, message: err.message });
   }

@@ -16,9 +16,8 @@ function formatSlide(slide: any, product: any) {
   const effectivePrice = isOfferExpired && product?.originalPrice
     ? product.originalPrice
     : (product?.price ?? 0);
-  const effectiveOriginalPrice = isOfferExpired
-    ? product?.originalPrice
-    : product?.originalPrice;
+  // The original price is shown whether or not the offer is live.
+  const effectiveOriginalPrice = product?.originalPrice;
 
   return {
     id: slide._id.toString(),

@@ -4,6 +4,7 @@ import { ENV } from "./config/env";
 
 import cron from "node-cron";
 import { restoreDemoChanges } from "./modules/demo/demo.service";
+import { expireStaleWarranties } from "./modules/warranty/warranty.service";
 
 async function startServer() {
   await connectDB();
@@ -16,6 +17,9 @@ async function startServer() {
       try {
         const result = await restoreDemoChanges();
         console.log("[CRON] ✅ Demo data restored successfully:", result);
+
+        const expired = await expireStaleWarranties();
+        console.log("[CRON] ⏳ Stale warranties expired:", expired);
       } catch (err) {
         console.error("[CRON] ❌ Failed to restore demo data:", err);
       }

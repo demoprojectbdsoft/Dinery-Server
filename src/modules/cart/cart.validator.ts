@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { objectIdSchema } from "../../utils/ids";
 
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ID");
+const objectId = objectIdSchema("Invalid ID");
 
 export const addToCartSchema = z.object({
   userId: objectId,

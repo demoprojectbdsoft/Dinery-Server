@@ -1,8 +1,8 @@
-import { Types } from "mongoose";
 import { Category } from "./category.model";
 import { SubCategory } from "../subcategory/subcategory.model";
 import { Product } from "../product/product.model";
 import { ApiError } from "../../utils/apiError";
+import { idVariants } from "../../utils/ids";
 import { CreateCategoryInput, UpdateCategoryInput } from "./category.validator";
 
 interface GetCategoriesFilter {
@@ -17,9 +17,9 @@ export async function createCategory(data: CreateCategoryInput) {
 
 export async function getCategories(filterInput: GetCategoriesFilter = {}) {
   const filter: Record<string, any> = {};
-  if (filterInput.isActive !== undefined){
+  if (filterInput.isActive !== undefined) {
     filter.isActive = filterInput.isActive;
-  } 
+  }
   return Category.find(filter).sort({ createdAt: -1 });
 }
 
@@ -31,16 +31,13 @@ export async function updateCategory(id: string, data: UpdateCategoryInput) {
 
 export async function deleteCategory(id: string) {
   // Block delete if any products belong to this category or its subcategories
-  const idObj = Types.ObjectId.isValid(id) ? new Types.ObjectId(id) : null;
-  const catMatches: any[] = idObj ? [id, idObj] : [id];
+  const catMatches = idVariants(id);
 
   const subCategories = await SubCategory.find({
     categoryId: { $in: catMatches },
   }).select("_id");
 
-  const subIdObjs = subCategories.map((s) => s._id);
-  const subIdStrs = subCategories.map((s) => s._id.toString());
-  const allSubMatches: any[] = [...subIdObjs, ...subIdStrs];
+  const allSubMatches = subCategories.flatMap((sub) => idVariants(sub._id.toString()));
 
   const productCount = await Product.countDocuments({
     $or: [

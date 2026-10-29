@@ -1,6 +1,7 @@
 import { catchAsync } from "../../utils/catchAsync";
 import { apiResponse } from "../../utils/apiResponse";
 import { ApiError } from "../../utils/apiError";
+import { parseQuery } from "../../utils/validate";
 import * as warrantyService from "./warranty.service";
 import {
   submitWarrantyClaimSchema,
@@ -38,14 +39,11 @@ export const getMyWarranties = catchAsync(async (req, res, next) => {
   if (!req.user?.id) {
     return next(new ApiError(401, "Authentication required"));
   }
-  const parsed = getWarrantiesQuerySchema.safeParse({
+  const query = parseQuery(getWarrantiesQuerySchema, {
     ...req.query,
     userId: req.user.id,
   });
-  if (!parsed.success) {
-    return next(new ApiError(400, parsed.error.issues[0].message));
-  }
-  const result = await warrantyService.getWarranties(parsed.data);
+  const result = await warrantyService.getWarranties(query);
   apiResponse(res, 200, result, "Warranties fetched successfully");
 });
 
@@ -71,12 +69,9 @@ export const getWarrantyForOrderItem = catchAsync(async (req, res, next) => {
 /**
  * Admin: list all warranties (optionally filtered).
  */
-export const getAllWarranties = catchAsync(async (req, res, next) => {
-  const parsed = getWarrantiesQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    return next(new ApiError(400, parsed.error.issues[0].message));
-  }
-  const result = await warrantyService.getWarranties(parsed.data);
+export const getAllWarranties = catchAsync(async (req, res) => {
+  const query = parseQuery(getWarrantiesQuerySchema, req.query);
+  const result = await warrantyService.getWarranties(query);
   apiResponse(res, 200, result, "Warranties fetched successfully");
 });
 

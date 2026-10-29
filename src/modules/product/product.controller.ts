@@ -1,6 +1,6 @@
 import { catchAsync } from "../../utils/catchAsync";
 import { apiResponse } from "../../utils/apiResponse";
-import { ApiError } from "../../utils/apiError";
+import { parseQuery } from "../../utils/validate";
 import * as productService from "./product.service";
 import { getProductsQuerySchema } from "./product.validator";
 
@@ -9,12 +9,9 @@ export const createProduct = catchAsync(async (req, res) => {
   apiResponse(res, 201, product, "Product created");
 });
 
-export const getProducts = catchAsync(async (req, res, next) => {
-  const parsed = getProductsQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    return next(new ApiError(400, parsed.error.issues[0].message));
-  }
-  const result = await productService.getProducts(parsed.data);
+export const getProducts = catchAsync(async (req, res) => {
+  const query = parseQuery(getProductsQuerySchema, req.query);
+  const result = await productService.getProducts(query);
   apiResponse(res, 200, result, "Products fetched successfully");
 });
 

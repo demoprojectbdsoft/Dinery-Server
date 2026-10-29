@@ -2,6 +2,7 @@ import { Cart } from "./cart.model";
 import { Product } from "../product/product.model";
 import { User } from "../user/user.model";
 import { ApiError } from "../../utils/apiError";
+import { isAdminRole } from "../../utils/roles";
 
 // Fetches user cart with populated product data and precalculated totals
 export async function getCartByUserId(userId: string) {
@@ -35,18 +36,28 @@ export async function getCartByUserId(userId: string) {
   };
 }
 
-export async function addToCart(userId: string, productId: string, quantity: number) {
-  const user = await User.findById(userId);
-  if (user && ((user.role || "").toLowerCase() === "admin" || (user.role || "").toLowerCase() === "demoadmin")) {
-    throw new ApiError(403, "Admins cannot add products to cart");
-  }
-
+/** Loads a product or fails the request with a 404. */
+async function findProductOrThrow(productId: string) {
   const product = await Product.findById(productId);
   if (!product) throw new ApiError(404, "Product not found");
+  return product;
+}
 
+/** Rejects products that are flagged out of stock or have no units left. */
+function assertInStock(product: any) {
   if (!product.inStock || (product.stockQuantity != null && product.stockQuantity <= 0)) {
     throw new ApiError(400, `"${product.title}" is currently out of stock`);
   }
+}
+
+export async function addToCart(userId: string, productId: string, quantity: number) {
+  const user = await User.findById(userId);
+  if (user && isAdminRole(user.role)) {
+    throw new ApiError(403, "Admins cannot add products to cart");
+  }
+
+  const product = await findProductOrThrow(productId);
+  assertInStock(product);
 
   const existing = await Cart.findOne({ userId, productId });
   const requestedTotal = existing ? existing.quantity + quantity : quantity;
@@ -69,12 +80,8 @@ export async function addToCart(userId: string, productId: string, quantity: num
 }
 
 export async function updateCartItem(userId: string, productId: string, quantity: number) {
-  const product = await Product.findById(productId);
-  if (!product) throw new ApiError(404, "Product not found");
-
-  if (!product.inStock || (product.stockQuantity != null && product.stockQuantity <= 0)) {
-    throw new ApiError(400, `"${product.title}" is currently out of stock`);
-  }
+  const product = await findProductOrThrow(productId);
+  assertInStock(product);
 
   if (product.stockQuantity != null && quantity > product.stockQuantity) {
     throw new ApiError(

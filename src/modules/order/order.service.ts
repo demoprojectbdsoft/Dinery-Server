@@ -8,7 +8,7 @@ import { CreateOrderInput, UpdateOrderStatusInput, CustomerResponseInput, GetOrd
 import { logOrderStatus } from "../order-status/order-status.service";
 import { createTransaction, getLatestTransactionForOrder } from "../transaction/transaction.service";
 import { getSiteSettings } from "../site-settings/site-settings.service";
-import { createWarrantiesForOrder } from "../warranty/warranty.service";
+import { createWarrantiesForOrder, voidWarrantiesForOrder } from "../warranty/warranty.service";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -65,18 +65,18 @@ export function getMembershipTier(points: number): "silver" | "gold" | "platinum
   return "silver";
 }
 
-// ─── Create Order ─────────────────────────────────────────────────────────────
+/** Order item references may be raw ids or populated documents. */
+function orderItemProductId(item: any) {
+  const ref = item.productId;
+  return typeof ref === "object" && ref !== null && "_id" in ref ? ref._id : ref;
+}
 
-export async function createOrder(data: CreateOrderInput) {
-  if (data.paymentMethod !== "cod" && !data.transactionId) {
-    throw new ApiError(400, "Transaction ID required for wallet payments");
-  }
-
-  // Build order items and calculate subtotal
+/** Loads every ordered product, verifies stock, and builds the priced line items. */
+async function buildOrderItems(items: CreateOrderInput["items"]) {
   let subtotal = 0;
   const orderItems = [];
 
-  for (const item of data.items) {
+  for (const item of items) {
     const product = await Product.findById(item.productId);
     if (!product) throw new ApiError(404, `Product not found: ${item.productId}`);
     if (product.stockQuantity != null && product.stockQuantity < item.quantity) {
@@ -93,27 +93,116 @@ export async function createOrder(data: CreateOrderInput) {
     });
   }
 
-  // Resolve shipping. If the client explicitly chose a method (free/standard/
-  // express), honour it; otherwise derive it from the live site settings.
-  let shippingConfig: { method: "free" | "standard" | "express"; fee: number; estimatedDelivery: string };
-  if (data.shippingMethod) {
-    const resolved = await resolveShippingConfig(subtotal);
-    const fee =
-      data.shippingMethod === "free"    ? 0 :
-      data.shippingMethod === "express" ? resolved.expressFee :
-      resolved.method === "free" ? 0 : resolved.fee;
-    shippingConfig = {
-      method: data.shippingMethod,
-      fee,
-      estimatedDelivery: resolved.estimatedDelivery,
-    };
-  } else {
-    shippingConfig = await resolveShippingConfig(subtotal);
+  return { orderItems, subtotal };
+}
+
+/**
+ * An explicit choice from checkout wins; otherwise the fee and delivery window
+ * are derived from the live site settings.
+ */
+async function resolveShipping(subtotal: number, requested?: "free" | "standard" | "express") {
+  const resolved = await resolveShippingConfig(subtotal);
+  if (!requested) return resolved;
+
+  const fee =
+    requested === "free"    ? 0 :
+    requested === "express" ? resolved.expressFee :
+    resolved.method === "free" ? 0 : resolved.fee;
+
+  return { method: requested, fee, estimatedDelivery: resolved.estimatedDelivery };
+}
+
+/** Free-text search over customer name, city, payment method and ids. */
+function buildOrderSearchCondition(search: string) {
+  const q = search.trim();
+  const matches: any[] = [
+    { "shippingAddress.fullName": { $regex: q, $options: "i" } },
+    { "shippingAddress.city":     { $regex: q, $options: "i" } },
+    { paymentMethod:              { $regex: q, $options: "i" } },
+  ];
+  if (/^[0-9a-fA-F]{24}$/.test(q)) matches.push({ _id: q }, { userId: q });
+  return { $or: matches };
+}
+
+/**
+ * Cancelling: fail the payment, retire any warranty coverage, and undo the
+ * sellCount the order contributed if it had already been delivered.
+ */
+async function applyCancellation(order: any, orderId: string) {
+  await Transaction.updateMany(
+    { orderId, status: { $ne: "failed" } },
+    { $set: { status: "failed" } }
+  );
+
+  try {
+    await voidWarrantiesForOrder(orderId);
+  } catch (warrantyErr) {
+    console.error("[WARRANTY] Failed to void warranties for order", orderId, warrantyErr);
   }
 
-  const shippingFee   = shippingConfig.fee;
-  const totalAmount   = subtotal + shippingFee;
-  const pointsEarned  = Math.floor(subtotal * POINTS_PER_DOLLAR);
+  if (order.orderStatus !== "delivered") return;
+
+  for (const item of order.items || []) {
+    const productId = orderItemProductId(item);
+    if (productId && item.quantity) {
+      await Product.findByIdAndUpdate(productId, { $inc: { sellCount: -item.quantity } });
+    }
+  }
+}
+
+/**
+ * Delivery: settle the payment, then (on the first delivery only) count the
+ * sale, credit loyalty points, re-check the tier, and issue warranties.
+ */
+async function applyDelivery(order: any, orderId: string, previousStatus: string) {
+  await Transaction.updateMany(
+    { orderId, status: { $ne: "success" } },
+    { $set: { status: "success" } }
+  );
+
+  if (previousStatus === "delivered") return;
+
+  for (const item of order.items || []) {
+    const productId = orderItemProductId(item);
+    if (productId && item.quantity) {
+      await Product.findByIdAndUpdate(productId, { $inc: { sellCount: item.quantity } });
+    }
+  }
+
+  const updatedUser = await User.findByIdAndUpdate(
+    order.userId,
+    { $inc: { points: order.pointsEarned } },
+    { new: true }
+  );
+
+  if (updatedUser) {
+    const points  = typeof updatedUser.points === "number" && !isNaN(updatedUser.points) ? updatedUser.points : 0;
+    const newTier = getMembershipTier(points);
+    if (updatedUser.member !== newTier) {
+      await User.findByIdAndUpdate(order.userId, { $set: { member: newTier } });
+    }
+  }
+
+  // Idempotent — one warranty per (user, product, order).
+  try {
+    await createWarrantiesForOrder(orderId, order.userId.toString(), order.items || []);
+  } catch (warrantyErr) {
+    console.error("[WARRANTY] Failed to create warranties for order", orderId, warrantyErr);
+  }
+}
+
+// ─── Create Order ─────────────────────────────────────────────────────────────
+
+export async function createOrder(data: CreateOrderInput) {
+  if (data.paymentMethod !== "cod" && !data.transactionId) {
+    throw new ApiError(400, "Transaction ID required for wallet payments");
+  }
+
+  const { orderItems, subtotal } = await buildOrderItems(data.items);
+  const shipping = await resolveShipping(subtotal, data.shippingMethod);
+
+  const totalAmount  = subtotal + shipping.fee;
+  const pointsEarned = Math.floor(subtotal * POINTS_PER_DOLLAR);
 
   // Save order
   const order = await Order.create({
@@ -122,10 +211,10 @@ export async function createOrder(data: CreateOrderInput) {
     shippingAddress: data.shippingAddress,
     paymentMethod: data.paymentMethod,
     subtotal,
-    shippingFee,
+    shippingFee: shipping.fee,
     totalAmount,
-    shippingMethod: shippingConfig.method,
-    estimatedDelivery: shippingConfig.estimatedDelivery,
+    shippingMethod: shipping.method,
+    estimatedDelivery: shipping.estimatedDelivery,
     pointsEarned,
   });
 
@@ -160,16 +249,7 @@ export async function getOrders(query: GetOrdersQuery) {
   if (userId) conditions.push({ userId });
   if (status && status !== "all") conditions.push({ orderStatus: status.toLowerCase() });
 
-  if (search?.trim()) {
-    const q = search.trim();
-    const searchOr: any[] = [
-      { "shippingAddress.fullName": { $regex: q, $options: "i" } },
-      { "shippingAddress.city":     { $regex: q, $options: "i" } },
-      { paymentMethod:              { $regex: q, $options: "i" } },
-    ];
-    if (/^[0-9a-fA-F]{24}$/.test(q)) searchOr.push({ _id: q }, { userId: q });
-    conditions.push({ $or: searchOr });
-  }
+  if (search?.trim()) conditions.push(buildOrderSearchCondition(search));
 
   const filter = conditions.length > 0 ? { $and: conditions } : {};
 
@@ -232,71 +312,14 @@ export async function updateOrderStatus(id: string, data: UpdateOrderStatusInput
 
   await logOrderStatus(id, data.orderStatus);
 
-  // On cancel → mark transaction failed (+ rollback sellCount if previously delivered)
+  // Settle the side effects of the new status. These need the *previous*
+  // status, which is why the original document is kept around.
   if (data.orderStatus === "cancelled") {
-    await Transaction.updateMany(
-      { orderId: id, status: { $ne: "failed" } },
-      { $set: { status: "failed" } }
-    );
-
-    if (order.orderStatus === "delivered") {
-      for (const item of order.items || []) {
-        if (item.productId && item.quantity) {
-          const prodId =
-            typeof item.productId === "object" && item.productId !== null && "_id" in item.productId
-              ? (item.productId as any)._id
-              : item.productId;
-          await Product.findByIdAndUpdate(prodId, {
-            $inc: { sellCount: -item.quantity },
-          });
-        }
-      }
-    }
+    await applyCancellation(order, id);
   }
 
-  // On delivered → mark transaction success + credit loyalty points (once) + increment product sellCount
   if (data.orderStatus === "delivered") {
-    await Transaction.updateMany(
-      { orderId: id, status: { $ne: "success" } },
-      { $set: { status: "success" } }
-    );
-
-    if (order.orderStatus !== "delivered") {
-      // Increment sellCount for each product according to quantity
-      for (const item of updated.items || []) {
-        if (item.productId && item.quantity) {
-          const prodId =
-            typeof item.productId === "object" && item.productId !== null && "_id" in item.productId
-              ? (item.productId as any)._id
-              : item.productId;
-          await Product.findByIdAndUpdate(prodId, {
-            $inc: { sellCount: item.quantity },
-          });
-        }
-      }
-
-      const updatedUser = await User.findByIdAndUpdate(
-        updated.userId,
-        { $inc: { points: updated.pointsEarned } },
-        { new: true }
-      );
-
-      if (updatedUser) {
-        const points  = typeof updatedUser.points === "number" && !isNaN(updatedUser.points) ? updatedUser.points : 0;
-        const newTier = getMembershipTier(points);
-        if (updatedUser.member !== newTier) {
-          await User.findByIdAndUpdate(updated.userId, { $set: { member: newTier } });
-        }
-      }
-
-      // Create warranty records for delivered items that carry a warranty period.
-      // Idempotent — one warranty per (user, product, order).
-      try {
-        await createWarrantiesForOrder(id, updated.userId.toString(), updated.items || []);
-      } catch (warrantyErr) {
-        console.error("[WARRANTY] Failed to create warranties for order", id, warrantyErr);
-      }
-    }
+    await applyDelivery(updated, id, order.orderStatus);
   }
 
   return updated;

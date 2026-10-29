@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { UNDO_COLLECTION } from "./demo.plugin";
+import { toObjectId } from "../../utils/ids";
 
 // Undo everything the demo admin did: delete what they added, put back what
 // they edited or deleted. Real admin changes are never in the log, so they stay.
@@ -15,14 +16,6 @@ export async function restoreDemoChanges() {
   if (!entries || entries.length === 0) {
     return { restoredAt, restoredAtLocal, timezone: "UTC+6", ...counts };
   }
-
-  const toObjectId = (id: any) => {
-    if (id instanceof mongoose.Types.ObjectId) return id;
-    if (typeof id === "string" && mongoose.Types.ObjectId.isValid(id)) {
-      return new mongoose.Types.ObjectId(id);
-    }
-    return id;
-  };
 
   // 1) delete what the demo admin created (first, so unique slugs can't clash)
   for (const entry of entries.filter((e) => e.before === null)) {

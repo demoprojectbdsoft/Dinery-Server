@@ -26,12 +26,12 @@ app.use(express.json());
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get("/api", (_req, res) => {
-  res.json({ success: true, message: "Electro server is running✅" });
+  res.json({ success: true, message: "Sparq server is running✅" });
 });
 
 
 app.get("/", (_req, res) => {
-  res.json({ success: true, message: "Electro server API is running✅" });
+  res.json({ success: true, message: "Sparq server API is running✅" });
 });
 
 app.use("/api/categories", categoryRoutes);

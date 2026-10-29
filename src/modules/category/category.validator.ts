@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { objectIdSchema } from "../../utils/ids";
 
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId");
+const objectId = objectIdSchema("Invalid ObjectId");
 
 export const createCategorySchema = z.object({
   ownerId: objectId,
