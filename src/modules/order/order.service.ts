@@ -249,7 +249,8 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
       session
     );
 
-    await logOrderStatus(orderId, "processing", { session });
+    // A new order always enters the flow at "confirmed".
+    await logOrderStatus(orderId, "confirmed", { session });
 
     for (const item of data.items) {
       await Product.findByIdAndUpdate(
