@@ -8,6 +8,7 @@ import { ApiError } from "../../utils/apiError";
 import { assertOwnerOrAdmin } from "../../utils/authz";
 import { withTransaction } from "../../utils/transactions";
 import { CreateOrderInput, UpdateOrderStatusInput, CustomerResponseInput, GetOrdersQuery } from "./order.validator";
+import { isAllowedTransition, nextStatuses } from "./order.flow";
 import { logOrderStatus } from "../order-status/order-status.service";
 import { createTransaction, getLatestTransactionForOrder } from "../transaction/transaction.service";
 import { getSiteSettings } from "../site-settings/site-settings.service";
@@ -333,9 +334,38 @@ export async function updateOrderStatus(id: string, data: UpdateOrderStatusInput
       : await Order.findById(id);
     if (!order) throw new ApiError(404, "Order not found");
 
-    // Cannot cancel a shipped order until the customer has responded
-    if (order.orderStatus === "shipped" && data.orderStatus === "cancelled" && !order.customerResponse) {
-      throw new ApiError(400, "Customer must respond before a shipped order can be cancelled");
+    // Re-selecting the current stage is a no-op, not a new timeline row.
+    if (order.orderStatus === data.orderStatus) return order;
+
+    if (!isAllowedTransition(order.orderStatus, data.orderStatus)) {
+      const allowed = nextStatuses(order.orderStatus);
+      throw new ApiError(
+        400,
+        allowed.length > 0
+          ? `A ${order.orderStatus} order can only move to: ${allowed.join(", ")}`
+          : `This order is ${order.orderStatus} and can no longer be changed`
+      );
+    }
+
+    // Once an order has shipped, the customer has to tell us what happened
+    // before we can close it either way.
+    if (order.orderStatus === "shipped" && !order.customerResponse) {
+      throw new ApiError(
+        400,
+        "Customer must respond before a shipped order can be delivered or cancelled"
+      );
+    }
+
+    // The customer already said it never arrived (or that they cancelled it),
+    // so marking it delivered would contradict them.
+    if (
+      data.orderStatus === "delivered" &&
+      (order.customerResponse === "not_received" || order.customerResponse === "cancelled")
+    ) {
+      throw new ApiError(
+        400,
+        `The customer reported "${order.customerResponse}", so this order cannot be marked delivered`
+      );
     }
 
     const updated = await Order.findByIdAndUpdate(id, data, { new: true, session });
