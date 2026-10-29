@@ -8,6 +8,9 @@ import { requireRole } from "../../middlewares/role.middleware";
 const router = Router();
 
 router.get("/", requireAuth, requireRole("admin"), userController.getUsers);
+// The caller's own data package. It has to be registered before "/:id",
+// otherwise Express matches "me" as a user id.
+router.get("/me/export", requireAuth, userController.exportMyData);
 router.get("/:id", requireAuth, userController.getUserById);
 // Ownership + field rules are enforced in the controller: admins may edit
 // anyone, a customer only their own profile and only non-privileged fields.

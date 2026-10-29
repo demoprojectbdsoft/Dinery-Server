@@ -3,8 +3,9 @@ import { apiResponse } from "../../utils/apiResponse";
 import { ApiError } from "../../utils/apiError";
 import { parseQuery } from "../../utils/validate";
 import { isAdminRole } from "../../utils/roles";
-import { assertOwnerOrAdmin } from "../../utils/authz";
+import { assertOwnerOrAdmin, currentUserId } from "../../utils/authz";
 import * as userService from "./user.service";
+import { exportAccountData } from "./account-export.service";
 import {
   ADMIN_ONLY_USER_FIELDS,
   getUsersQuerySchema,
@@ -56,4 +57,13 @@ export const updateUser = catchAsync(async (req, res) => {
 export const deleteUser = catchAsync(async (req, res) => {
   await userService.deleteUser(req.params.id as string);
   apiResponse(res, 200, null, "User deleted");
+});
+
+/**
+ * The caller's own data, packaged for download. Used by the customer settings
+ * page before somebody decides to delete their account.
+ */
+export const exportMyData = catchAsync(async (req, res) => {
+  const data = await exportAccountData(currentUserId(req.user));
+  apiResponse(res, 200, data, "Account data exported");
 });
