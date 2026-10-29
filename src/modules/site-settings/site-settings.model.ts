@@ -57,6 +57,34 @@ const shippingConfigSchema = new Schema(
   { _id: false }
 );
 
+// ── About Page Content ───────────────────────────────────────────────────────
+// Every line of text shown on /about is edited here, so the store owner never
+// has to touch the code to change the story, the address note or the hours.
+const aboutConfigSchema = new Schema(
+  {
+    headline: {
+      type: String,
+      default: "We Provide High Quality Electronics & Tech Gadgets",
+    },
+    intro: { type: String, default: "" },
+    headquartersNote: {
+      type: String,
+      default: "Official Storefront & Innovation Center",
+    },
+    openingHoursNote: {
+      type: String,
+      default: "Live helpline & in-store customer assistance",
+    },
+    ctaTitle: { type: String, default: "Ready to explore our latest arrivals?" },
+    ctaDescription: {
+      type: String,
+      default:
+        "Browse our wide selection of consumer tech, laptops, smartphones, and gaming consoles today.",
+    },
+  },
+  { _id: false }
+);
+
 // ── Typography & Google Fonts Config ─────────────────────────────────────────
 const typographySchema = new Schema(
   {
@@ -77,8 +105,12 @@ const siteSettingsSchema = new Schema(
     supportEmail: { type: String, default: "support@sparq.com" },
     contactEmail: { type: String, default: "contact@sparq.com" },
     supportPhone: { type: String, default: "(800) 8001-8588" },
+    // Line breaks are kept, so the owner can list one day per line.
     openingHours: { type: String, default: "Mon - Fri: 9:00 AM - 8:00 PM" },
     address: { type: String, default: "" },
+
+    // ── About Page
+    about: { type: aboutConfigSchema, default: () => ({}) },
 
     // ── SEO / Meta
     metaTitle: { type: String, default: "Sparq - Premium Electronics Store" },
