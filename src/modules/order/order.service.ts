@@ -20,6 +20,10 @@ const SHIPPING_FEE       = 15.0;
 const EXPRESS_DELIVERY_FEE = 25.0;
 const FREE_SHIPPING_FROM = 50.0;
 const POINTS_PER_DOLLAR  = 1;
+/** 100 loyalty points convert into 1 currency unit at checkout. */
+const POINTS_PER_CURRENCY = 100;
+/** Below one full unit there is nothing worth deducting. */
+const MIN_POINTS_TO_REDEEM = 100;
 
 /**
  * Resolve the shipping option for an order from the live site settings.
@@ -67,6 +71,16 @@ export function getMembershipTier(points: number): "silver" | "gold" | "platinum
   if (points >= 4000)  return "platinum";
   if (points >= 1000)  return "gold";
   return "silver";
+}
+
+/** Writes the tier that matches the user's current points balance. */
+async function syncMembershipTier(user: any, session?: ClientSession) {
+  const points = typeof user.points === "number" && !isNaN(user.points) ? user.points : 0;
+  const tier = getMembershipTier(points);
+
+  if (user.member !== tier) {
+    await User.findByIdAndUpdate(user._id, { $set: { member: tier } }, { session });
+  }
 }
 
 /** Order item references may be raw ids or populated documents. */
@@ -162,6 +176,16 @@ async function applyCancellation(
     await Product.findByIdAndUpdate(productId, { $inc: changes }, { session });
   }
 
+  // Points spent at checkout are always returned, delivered or not.
+  if (order.pointsRedeemed) {
+    const refundedUser = await User.findByIdAndUpdate(
+      order.userId,
+      { $inc: { points: order.pointsRedeemed } },
+      { new: true, session }
+    );
+    if (refundedUser) await syncMembershipTier(refundedUser, session);
+  }
+
   if (!wasDelivered || !order.pointsEarned) return;
 
   // Delivery credited these points, so a return takes them back and re-checks
@@ -171,13 +195,7 @@ async function applyCancellation(
     { $inc: { points: -order.pointsEarned } },
     { new: true, session }
   );
-  if (!updatedUser) return;
-
-  const points = typeof updatedUser.points === "number" && !isNaN(updatedUser.points) ? updatedUser.points : 0;
-  const newTier = getMembershipTier(points);
-  if (updatedUser.member !== newTier) {
-    await User.findByIdAndUpdate(order.userId, { $set: { member: newTier } }, { session });
-  }
+  if (updatedUser) await syncMembershipTier(updatedUser, session);
 }
 
 /**
@@ -216,16 +234,53 @@ async function applyDelivery(
   );
 
   if (updatedUser) {
-    const points  = typeof updatedUser.points === "number" && !isNaN(updatedUser.points) ? updatedUser.points : 0;
-    const newTier = getMembershipTier(points);
-    if (updatedUser.member !== newTier) {
-      await User.findByIdAndUpdate(order.userId, { $set: { member: newTier } }, { session });
-    }
+    await syncMembershipTier(updatedUser, session);
   }
 
   // Idempotent — one warranty per (user, product, order). A failure here rolls
   // the delivery back, so retrying it cannot settle the order twice.
   await createWarrantiesForOrder(orderId, order.userId.toString(), order.items || [], session);
+}
+
+/**
+ * Turns requested loyalty points into a cash discount and takes them off the
+ * customer's balance. The guarded update only matches when the balance still
+ * covers the request, so two tabs can never spend the same points twice.
+ */
+async function redeemPoints(
+  userId: string,
+  subtotal: number,
+  requested: number,
+  session?: ClientSession
+) {
+  const pointsToRedeem = Math.floor(requested);
+
+  if (pointsToRedeem < MIN_POINTS_TO_REDEEM) {
+    throw new ApiError(400, `Redeem at least ${MIN_POINTS_TO_REDEEM} points`);
+  }
+
+  // Points pay for products only - the delivery fee is always collected.
+  const maxPointsForOrder = Math.floor(subtotal * POINTS_PER_CURRENCY);
+  if (pointsToRedeem > maxPointsForOrder) {
+    throw new ApiError(400, "Points can only cover the product total, not the delivery fee");
+  }
+
+  const updatedUser = await User.findOneAndUpdate(
+    { _id: userId, points: { $gte: pointsToRedeem } },
+    { $inc: { points: -pointsToRedeem } },
+    { new: true, session }
+  );
+
+  if (!updatedUser) {
+    throw new ApiError(400, "You do not have enough reward points");
+  }
+
+  await syncMembershipTier(updatedUser, session);
+
+  return {
+    pointsRedeemed: pointsToRedeem,
+    pointsDiscount: pointsToRedeem / POINTS_PER_CURRENCY,
+  };
 }
 
 // ─── Create Order ─────────────────────────────────────────────────────────────
@@ -238,13 +293,23 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
   // Pricing only reads, so it stays outside the transaction.
   const { orderItems, subtotal } = await buildOrderItems(data.items);
   const shipping = await resolveShipping(subtotal, data.shippingMethod);
+  const pointsRequested = data.pointsToRedeem ?? 0;
 
-  const totalAmount  = subtotal + shipping.fee;
-  const pointsEarned = Math.floor(subtotal * POINTS_PER_DOLLAR);
-
-  // The order, its payment row, its first timeline entry, the stock decrement
-  // and the cart reset are one unit of work: either all of them land or none.
+  // The order, its payment row, its first timeline entry, the stock decrement,
+  // the points deduction and the cart reset are one unit of work: either all of
+  // them land or none.
   return withTransaction(async (session) => {
+    // Spending points validates the request and updates the balance, so it runs
+    // inside the transaction as well.
+    const redemption = pointsRequested
+      ? await redeemPoints(userId, subtotal, pointsRequested, session)
+      : { pointsRedeemed: 0, pointsDiscount: 0 };
+
+    const totalAmount = subtotal + shipping.fee - redemption.pointsDiscount;
+    // Points are earned on what is really paid for the products, never on the
+    // part that points covered.
+    const pointsEarned = Math.floor((subtotal - redemption.pointsDiscount) * POINTS_PER_DOLLAR);
+
     const order = new Order({
       userId,
       items: orderItems,
@@ -256,6 +321,8 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
       shippingMethod: shipping.method,
       estimatedDelivery: shipping.estimatedDelivery,
       pointsEarned,
+      pointsRedeemed: redemption.pointsRedeemed,
+      pointsDiscount: redemption.pointsDiscount,
     });
     await order.save({ session });
 

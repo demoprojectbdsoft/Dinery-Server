@@ -29,6 +29,8 @@ export const createOrderSchema = z
     /** Optional explicit shipping choice from checkout ("free" | "standard" | "express").
      *  When omitted the backend resolves it from the live site settings. */
     shippingMethod: z.enum(["free", "standard", "express"]).optional(),
+    /** Loyalty points the customer chose to spend on this order (100 pts = 1 unit). */
+    pointsToRedeem: z.number().int().min(0).optional(),
   })
   .superRefine((data, ctx) => {
     const sa = data.shippingAddress;

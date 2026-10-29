@@ -64,6 +64,9 @@ const orderSchema = new Schema(
       default: null,
     },
     pointsEarned: { type: Number, default: 0 },
+    /** Loyalty points this order used up, and the money they saved. */
+    pointsRedeemed: { type: Number, default: 0 },
+    pointsDiscount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
