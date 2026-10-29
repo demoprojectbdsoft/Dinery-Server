@@ -145,11 +145,9 @@ async function applyCancellation(
     { session }
   );
 
-  try {
-    await voidWarrantiesForOrder(orderId, session);
-  } catch (warrantyErr) {
-    console.error("[WARRANTY] Failed to void warranties for order", orderId, warrantyErr);
-  }
+  // Errors are left to bubble up: the transaction then rolls the whole
+  // cancellation back instead of leaving warranties open on a cancelled order.
+  await voidWarrantiesForOrder(orderId, session);
 
   const wasDelivered = previousStatus === "delivered";
 
@@ -225,12 +223,9 @@ async function applyDelivery(
     }
   }
 
-  // Idempotent — one warranty per (user, product, order).
-  try {
-    await createWarrantiesForOrder(orderId, order.userId.toString(), order.items || [], session);
-  } catch (warrantyErr) {
-    console.error("[WARRANTY] Failed to create warranties for order", orderId, warrantyErr);
-  }
+  // Idempotent — one warranty per (user, product, order). A failure here rolls
+  // the delivery back, so retrying it cannot settle the order twice.
+  await createWarrantiesForOrder(orderId, order.userId.toString(), order.items || [], session);
 }
 
 // ─── Create Order ─────────────────────────────────────────────────────────────
