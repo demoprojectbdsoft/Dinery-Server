@@ -3,6 +3,7 @@ import { ProductReview } from "./review.model";
 import { User } from "../user/user.model";
 import { Product } from "../product/product.model";
 import { CreateReviewInput, UpdateReviewInput, GetReviewsQuery } from "./review.validator";
+import { ApiError } from "../../utils/apiError";
 
 // Converts a string ID into a filter that matches both string and ObjectId forms in MongoDB
 function toIdQuery(id: string) {

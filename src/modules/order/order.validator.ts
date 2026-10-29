@@ -30,23 +30,21 @@ export const createOrderSchema = z
     shippingMethod: z.enum(["free", "standard", "express"]).optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.paymentMethod === "cod") {
-      const sa = data.shippingAddress;
-      if (
-        !sa ||
-        !sa.fullName?.trim() ||
-        !sa.phone?.trim() ||
-        !sa.address?.trim() ||
-        !sa.city?.trim() ||
-        !sa.postalCode?.trim()
-      ) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            "Shipping address (full name, phone, address, city, postal code) is required for Cash on Delivery",
-          path: ["shippingAddress"],
-        });
-      }
+    const sa = data.shippingAddress;
+    if (
+      !sa ||
+      !sa.fullName?.trim() ||
+      !sa.phone?.trim() ||
+      !sa.address?.trim() ||
+      !sa.city?.trim() ||
+      !sa.postalCode?.trim()
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Shipping address (full name, phone, address, city, postal code) is required for all payment methods",
+        path: ["shippingAddress"],
+      });
     }
   });
 

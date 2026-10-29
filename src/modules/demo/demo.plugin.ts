@@ -11,6 +11,7 @@ export const TRACKED = [
   "orders",
   "orderstatuslogs",
   "sitesettings",
+  "warranties",
 ];
 export const UNDO_COLLECTION = "demo_undo";
 

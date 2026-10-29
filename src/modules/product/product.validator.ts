@@ -31,6 +31,9 @@ export const createProductSchema = z.object({
   specifications: z.record(z.string(), z.any()).optional(),
   isFeatured: z.boolean().optional(),
   offerEndDate: z.coerce.date().optional().nullable(),
+  warrantyPeriodMonths: z.number().int().nonnegative().optional(),
+  warrantyType: z.enum(["manufacturer-warranty", "seller-warranty", "extended-warranty", "other", "none"]).optional(),
+  warrantyTerms: z.string().max(1000).optional(),
 });
 
 export const updateProductSchema = createProductSchema.partial();

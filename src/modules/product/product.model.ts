@@ -32,6 +32,19 @@ const productSchema = new Schema(
     isFeatured: { type: Boolean, default: false },
     offerEndDate: { type: Date },
     offerExpired: { type: Boolean, default: false }, // set true by cron once offer lapses
+
+    /**
+     * Warranty period for this product, in months.
+     * When set, a warranty record is created for each delivered order containing
+     * this product. 0 or undefined means the product is not covered by warranty.
+     */
+    warrantyPeriodMonths: { type: Number, default: 0, min: 0 },
+    warrantyType: {
+      type: String,
+      enum: ["manufacturer-warranty", "seller-warranty", "extended-warranty", "other", "none"],
+      default: "manufacturer-warranty",
+    },
+    warrantyTerms: { type: String },
   },
   {
     timestamps: true,

@@ -8,6 +8,7 @@ import { CreateOrderInput, UpdateOrderStatusInput, CustomerResponseInput, GetOrd
 import { logOrderStatus } from "../order-status/order-status.service";
 import { createTransaction, getLatestTransactionForOrder } from "../transaction/transaction.service";
 import { getSiteSettings } from "../site-settings/site-settings.service";
+import { createWarrantiesForOrder } from "../warranty/warranty.service";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -286,6 +287,14 @@ export async function updateOrderStatus(id: string, data: UpdateOrderStatusInput
         if (updatedUser.member !== newTier) {
           await User.findByIdAndUpdate(updated.userId, { $set: { member: newTier } });
         }
+      }
+
+      // Create warranty records for delivered items that carry a warranty period.
+      // Idempotent — one warranty per (user, product, order).
+      try {
+        await createWarrantiesForOrder(id, updated.userId.toString(), updated.items || []);
+      } catch (warrantyErr) {
+        console.error("[WARRANTY] Failed to create warranties for order", id, warrantyErr);
       }
     }
   }
