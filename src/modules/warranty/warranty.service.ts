@@ -76,6 +76,11 @@ export async function createWarrantiesForOrder(
       activationDate,
       expiryDate,
       status: "active",
+      // Snapshot the product's warranty terms. The claim screens read these
+      // when the product itself is no longer available.
+      warrantyType: product.warrantyType,
+      warrantyPeriodMonths: months,
+      warrantyTerms: product.warrantyTerms,
     });
     await warranty.save({ session });
     created++;
@@ -194,6 +199,7 @@ export async function submitClaim(
   }
 
   warranty.status = "claim_submitted";
+  warranty.claimProblem = data.problem;
   warranty.claimReason = data.reason;
   warranty.claimDescription = data.description;
   warranty.claimImages = data.images || [];
@@ -251,6 +257,10 @@ function formatWarranty(w: any) {
     activationDate: w.activationDate,
     expiryDate: w.expiryDate,
     status: w.status,
+    warrantyType: w.warrantyType,
+    warrantyPeriodMonths: w.warrantyPeriodMonths,
+    warrantyTerms: w.warrantyTerms,
+    claimProblem: w.claimProblem,
     claimReason: w.claimReason,
     claimDescription: w.claimDescription,
     claimImages: Array.isArray(w.claimImages) ? w.claimImages : [],

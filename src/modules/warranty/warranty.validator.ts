@@ -4,12 +4,30 @@ import { objectIdSchema } from "../../utils/ids";
 const objectId = objectIdSchema("Invalid ID");
 
 /**
+ * The problems a customer can pick when filing a claim. Keeping the list on the
+ * server means an unknown value can never be stored, while the labels shown to
+ * the customer live on the frontend.
+ */
+export const CLAIM_PROBLEM_VALUES = [
+  "not_working",
+  "stopped_working",
+  "damaged_on_arrival",
+  "battery_issue",
+  "display_issue",
+  "missing_parts",
+  "other",
+] as const;
+
+/**
  * A customer submits a warranty claim for an existing, active warranty record.
  * The customer's own identity is resolved server-side from the auth token, so
  * the request body only carries the warranty reference and the claim details.
  */
 export const submitWarrantyClaimSchema = z.object({
   warrantyId: objectId,
+  problem: z.enum(CLAIM_PROBLEM_VALUES, {
+    message: "Choose what went wrong with the product",
+  }),
   reason: z.string().min(1, "Reason is required").max(200),
   description: z.string().min(1, "Description is required").max(2000),
   images: z.array(z.string().url()).max(5, "Maximum 5 images per claim").optional().default([]),
