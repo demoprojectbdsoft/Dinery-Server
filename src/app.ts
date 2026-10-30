@@ -22,6 +22,7 @@ import contactRoutes from "./modules/contact/contact.route";
 import messageRoutes from "./modules/message/message.route";
 import mailRoutes from "./modules/mail/mail.route";
 import activityRoutes from "./modules/activity/activity.route";
+import deliveryRoutes from "./modules/delivery/delivery.route";
 import { errorMiddleware } from "./middlewares/error.middleware";
 import { notFound } from "./middlewares/notFound.middleware";
 
@@ -59,6 +60,7 @@ app.use("/api/contact", contactRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/mail", mailRoutes);
 app.use("/api/activities", activityRoutes);
+app.use("/api/deliveries", deliveryRoutes);
 app.use("/api/demo", demoRoutes);
 
 app.use(notFound);

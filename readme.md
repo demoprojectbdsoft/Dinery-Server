@@ -784,8 +784,17 @@ The `rider` role and the delivery domain are being added in seven phases, withou
 - **Ownership** — every rider endpoint will scope the query to the caller's token, never a body-supplied rider id.
 - **Notifications** — the same `activities` collection carries the store feed and each person's own lines; `GET /activities/mine` reads only the caller's, and the order service writes the customer copy next to every stage change.
 - **Tracking transport** — the API stores only the latest rider position per delivery; the customer page polls it every 8 seconds (Vercel serverless friendly), and optional Ably keys publish the same message for instant updates.
+- **Delivery model** — one `deliveries` collection: `orderId`, `riderId`, `assignedBy`, `status`, a denormalised customer/address copy, `fee`, `distanceKm`, `declineReason`, `expiresAt` and an append-only `history`. A partial unique index on `orderId` covers the active statuses, so an order can never have two live assignments.
+- **Statuses** — `assigned`, `accepted`, `picked_up`, `out_for_delivery`, `delivered`, `cancelled`, `declined`. The lists accept the shortcuts `active` (`accepted`, `picked_up`, `out_for_delivery`) and `finished` (`delivered`, `cancelled`, `declined`).
 
-**Progress:** Phase 1 ✅ roles, RBAC and no-shopping rules. Notifications ✅ in-app + email for customers and riders. Delivery models, assignment, lifecycle, tracking and OTP follow in Phases 2–7.
+| Method | Endpoint | Who | Purpose |
+|---|---|---|---|
+| `GET` | `/api/deliveries` | rider | The caller's jobs. `status` (any status plus `all`, `active`, `finished`), `search` over order/customer/phone, `sort` = `newest`, `oldest`, `fee_desc`, `page`, `limit` (max 100) |
+| `GET` | `/api/deliveries/stats?days=` | rider | Totals, completed, active, pending requests, cancelled, earnings (all time, this month, in the window), success rate, average delivery minutes, a daily series, the status breakdown and the last eight jobs |
+
+Every rider read starts from the `riderId` in the verified token — no endpoint takes a rider id from the request.
+
+**Progress:** Phase 1 ✅ roles, RBAC and no-shopping rules. Notifications ✅ in-app + email for customers and riders. Phase 2 ✅ delivery model, `GET /api/deliveries` and `GET /api/deliveries/stats`. Assignment, the lifecycle, tracking and OTP follow in Phases 3–7.
 
 ---
 
@@ -804,7 +813,8 @@ The `rider` role and the delivery domain are being added in seven phases, withou
 | Reviews & rating recalculation | ✅ Complete |
 | Store settings, branding, About page copy & opening hours | ✅ Complete |
 | Demo admin sandbox with daily restore | ✅ Complete |
-| Rider role, immediate role refresh and no-shopping guards | 🚧 Phase 1 of 7 |
+| Rider role, immediate role refresh and no-shopping guards | ✅ Complete |
+| Delivery model, rider job list and rider stats endpoints | ✅ Phase 2 of 7 |
 | Customer & rider notifications — in-app feed and transactional email | ✅ Complete |
 | Account data export | ✅ Complete |
 | Rate limiting, CORS allow-list, database indexes | ⏳ Planned |
@@ -822,7 +832,7 @@ The `rider` role and the delivery domain are being added in seven phases, withou
 - [ ] **Automated tests** — unit and integration coverage per module.
 - [ ] **Real payment gateway** — Stripe / SSLCommerz / bKash, replacing the simulated wallet flow.
 - [ ] **Coupons & promo codes** — server-validated discount codes.
-- [ ] **Rider role & delivery module** — assigned deliveries, status updates, live location.
+- [ ] **Rider assignment & lifecycle** — admin assignment at `Shipped`, accept/decline, pickup to delivery, live location (Phases 3–5).
 - [ ] **"Lucky Box" rewards** — a gamified way to spend loyalty points.
 - [ ] **Multi-tenant architecture** — a `tenantId` on every collection with per-store subdomains.
 - [ ] **Store onboarding & subscription plans** — self-serve store creation and billing.

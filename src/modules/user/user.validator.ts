@@ -11,6 +11,11 @@ export const updateUserSchema = z.object({
   phone: z.string().optional(),
   bio: z.string().optional(),
   department: z.string().optional(),
+  /** Rider-only details, written from the rider's own profile page. */
+  vehicleType: z.string().optional(),
+  vehicleNumber: z.string().optional(),
+  licenseNumber: z.string().optional(),
+  availability: z.enum(["online", "offline"]).optional(),
 });
 
 /**
@@ -26,12 +31,20 @@ export const ADMIN_ONLY_USER_FIELDS = [
   "department",
 ] as const;
 
-/** The only fields a customer may change on their own profile. */
+/**
+ * The only fields a customer may change on their own profile. The rider fields
+ * are here too: a rider signs into the same account, and going online or
+ * filling in a plate number must not need an admin.
+ */
 export const selfUpdateUserSchema = updateUserSchema.pick({
   name: true,
   image: true,
   phone: true,
   bio: true,
+  vehicleType: true,
+  vehicleNumber: true,
+  licenseNumber: true,
+  availability: true,
 });
 
 export const getUsersQuerySchema = z.object({
