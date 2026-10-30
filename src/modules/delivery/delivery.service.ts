@@ -61,6 +61,7 @@ function riderOf(delivery: any) {
     _id: String(rider._id),
     name: rider.name || "",
     phone: rider.phone || "",
+    image: rider.image || "",
     vehicleType: rider.vehicleType || "",
     vehicleNumber: rider.vehicleNumber || "",
   };
@@ -772,7 +773,7 @@ export async function advanceDelivery(riderId: string, id: string, input: RiderS
       },
     },
     { new: true }
-  ).populate("riderId", "name phone vehicleType vehicleNumber");
+  ).populate("riderId", "name phone image vehicleType vehicleNumber");
 
   if (!updated) {
     throw new ApiError(409, "This delivery changed while you were updating it. Reload and try again.");
@@ -885,7 +886,7 @@ export async function completeDelivery(riderId: string, id: string, code: string
       },
     },
     { new: true }
-  ).populate("riderId", "name phone vehicleType vehicleNumber");
+  ).populate("riderId", "name phone image vehicleType vehicleNumber");
 
   await markOtpUsed(String(delivery._id));
 
@@ -966,7 +967,7 @@ export async function getAdminDeliveries(query: AdminDeliveryQuery) {
 
   const [deliveries, total] = await Promise.all([
     Delivery.find(filter)
-      .populate("riderId", "name phone vehicleType vehicleNumber")
+      .populate("riderId", "name phone image vehicleType vehicleNumber")
       .sort(sortMap[sort] ?? sortMap.newest)
       .skip((page - 1) * limit)
       .limit(limit)
@@ -1030,7 +1031,7 @@ export async function getAdminDeliveryOverview() {
 export async function getOrderDeliveries(orderId: string) {
   if (!Types.ObjectId.isValid(orderId)) throw new ApiError(404, "Order not found");
   const deliveries = await Delivery.find({ orderId: new Types.ObjectId(orderId) })
-    .populate("riderId", "name phone vehicleType vehicleNumber")
+    .populate("riderId", "name phone image vehicleType vehicleNumber")
     .sort({ createdAt: -1 })
     .lean();
   return { deliveries: deliveries.map(toDto) };
@@ -1062,7 +1063,7 @@ export async function cancelDeliveryByAdmin(
       },
     },
     { new: true }
-  ).populate("riderId", "name phone vehicleType vehicleNumber");
+  ).populate("riderId", "name phone image vehicleType vehicleNumber");
 
   if (!updated) throw new ApiError(409, "This delivery changed while you were updating it");
 

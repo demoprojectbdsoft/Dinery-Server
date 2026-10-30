@@ -90,7 +90,7 @@ export async function getTracking(orderId: string, requester: Requester) {
   if (!Types.ObjectId.isValid(orderId)) throw new ApiError(404, "Order not found");
 
   const order = await Order.findById(orderId)
-    .select("userId orderStatus shippingAddress estimatedDelivery shippingMethod totalAmount")
+    .select("userId orderStatus shippingAddress estimatedDelivery shippingMethod totalAmount createdAt")
     .lean();
   if (!order) throw new ApiError(404, "Order not found");
 
@@ -99,7 +99,7 @@ export async function getTracking(orderId: string, requester: Requester) {
   // The newest row wins: a reassigned order keeps the earlier attempts for the
   // history but only the current one is on the road.
   const delivery = await Delivery.findOne({ orderId: new Types.ObjectId(orderId) })
-    .populate("riderId", "name phone vehicleType vehicleNumber")
+    .populate("riderId", "name phone image vehicleType vehicleNumber")
     .sort({ createdAt: -1 });
 
   if (!delivery) {
@@ -112,6 +112,7 @@ export async function getTracking(orderId: string, requester: Requester) {
         shippingMethod: order.shippingMethod || "standard",
         address: order.shippingAddress?.address || "",
         city: order.shippingAddress?.city || "",
+        createdAt: new Date(order.createdAt).toISOString(),
       },
       delivery: null,
       location: null,
@@ -139,6 +140,7 @@ export async function getTracking(orderId: string, requester: Requester) {
       shippingMethod: order.shippingMethod || "standard",
       address: order.shippingAddress?.address || "",
       city: order.shippingAddress?.city || "",
+      createdAt: new Date(order.createdAt).toISOString(),
     },
     delivery: toDto(delivery),
     location,
