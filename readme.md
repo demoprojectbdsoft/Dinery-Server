@@ -487,6 +487,15 @@ A review has to be earned. All of these are checked server-side:
 
 `recalculateProductRating()` re-aggregates the product's rating and review count on every create, update and delete, so a stored rating is never stale. Editing is limited to the reviewer; deletion is allowed for the reviewer or an admin.
 
+The rule is also enforced by a unique index on `{ userId, productId }`. That index cannot be built while two reviews for the same customer and product already exist — the server then logs `[REVIEW] Could not build the unique review index` and keeps running **without** the index, so a double submit is no longer caught. Clean up the old duplicates once with:
+
+```bash
+npm run dedupe:reviews               # report only, deletes nothing
+npx tsx src/scripts/dedupe-reviews.ts --apply
+```
+
+The newest copy of each pair is kept (a second submit is usually a corrected rating), the older copies are deleted, and the index is rebuilt in the same run. Point `.env` at the database you want to clean.
+
 ### Catalog & cart
 
 - **Cascade delete** — deleting a category also deletes its subcategories.

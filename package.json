@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch -r tsconfig-paths/register src/index.ts",
     "build": "tsc",
-    "start": "node -r tsconfig-paths/register dist/index.js"
+    "start": "node -r tsconfig-paths/register dist/index.js",
+    "dedupe:reviews": "tsx src/scripts/dedupe-reviews.ts"
   },
   "keywords": [],
   "author": "",
