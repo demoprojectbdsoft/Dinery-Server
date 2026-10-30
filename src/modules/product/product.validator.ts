@@ -25,7 +25,9 @@ export const createProductSchema = z.object({
   additionalImages: z.array(z.string().url()).optional(),
 
    inStock: z.boolean().optional(),
-  stockQuantity: z.number().int().nonnegative().optional(),
+  // A blank stock field means the product is not stock-tracked. `null` clears a
+  // number the admin removed, while leaving the field out keeps the stored one.
+  stockQuantity: z.number().int().nonnegative().nullable().optional(),
   sellCount: z.number().int().nonnegative().optional(),
 
   badges: z.array(z.string()).optional(),  // plain strings, matches current form
