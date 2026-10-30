@@ -20,6 +20,7 @@ import promoRoutes from "./modules/promo/promo.route";
 import warrantyRoutes from "./modules/warranty/warranty.route";
 import contactRoutes from "./modules/contact/contact.route";
 import messageRoutes from "./modules/message/message.route";
+import mailRoutes from "./modules/mail/mail.route";
 import { errorMiddleware } from "./middlewares/error.middleware";
 import { notFound } from "./middlewares/notFound.middleware";
 
@@ -55,6 +56,7 @@ app.use("/api/promos", promoRoutes);
 app.use("/api/warranties", warrantyRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/messages", messageRoutes);
+app.use("/api/mail", mailRoutes);
 app.use("/api/demo", demoRoutes);
 
 app.use(notFound);

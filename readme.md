@@ -80,6 +80,7 @@ src/
 │   ├── auth.middleware.ts     requireAuth — JWT (JWKS) with a session-token fallback
 │   ├── role.middleware.ts     requireRole("admin") — role gate
 │   ├── cron.middleware.ts     requireCronOrAdmin — CRON_SECRET or Vercel's cron header
+│   ├── internal.middleware.ts requireInternalKey — the key the storefront sends
 │   ├── error.middleware.ts    one JSON error shape for the whole API
 │   └── notFound.middleware.ts 404 for unknown routes
 ├── modules/
@@ -88,6 +89,7 @@ src/
 │   ├── category/              top-level categories
 │   ├── contact/               contact-page messages, saved then emailed to the store inbox
 │   ├── demo/                  demo-admin write tracking + restore endpoint
+│   ├── mail/                  emails the storefront asks for (the password reset link)
 │   ├── message/               stored contact messages, read in the admin dashboard
 │   ├── order/                 order placement, status flow, cancellation, delivery
 │   ├── order-status/          status history log
@@ -138,6 +140,7 @@ Base URL: `/api`. All replies use the same envelope: `{ success, message, data }
 | **Bearer** | A valid token is required; the caller sees only their own data. |
 | **Admin** | `requireAuth` + `requireRole("admin")` (the demo admin counts as admin). |
 | **Cron** | `Authorization: Bearer <CRON_SECRET>` or Vercel's `x-vercel-cron: 1`, or an admin token. |
+| **Internal** | `x-internal-key: <INTERNAL_API_KEY>`. The storefront calls it; people cannot. |
 
 ### Health
 
@@ -266,6 +269,18 @@ The contact page writes here; the admin reads it. Creating is not a public endpo
 | `GET` | `/messages` | Admin | Paginated. Query: `status` (`all`, `sent`, `failed`), `search` (name, email or subject), `sort` (`newest`, `oldest`, `name`, `subject`), `page`, `limit` |
 | `POST` | `/messages/:id/reply` | Admin | Emails the visitor. Body: `subject`, `message`. The address is read from the stored message, never from the body |
 | `DELETE` | `/messages/:id` | Admin | |
+
+### Mail (internal)
+
+The storefront keeps no mailbox of its own. When a customer clicks **Forgot password**, better-auth builds the one-time link and the Next.js app asks this API to send it.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| `POST` | `/mail/reset-password` | Internal | Body: `email`, `name`, `url` (the finished link from better-auth). Sends the "Reset your password" email through the same SMTP mailer, drawn with the site's colours and logo |
+
+- The whole route is closed without `x-internal-key`, so nobody can make the store email a link of their choosing to a stranger. A wrong key gets `401`; with no key configured on the server it answers `500` instead of letting everything through.
+- The key lives in `INTERNAL_API_KEY` and must hold the **same value** in both projects.
+- A send failure comes back as `502` with the mail server's own reason, so the customer is told the link did not go out instead of waiting for an inbox that stays empty.
 
 ### Store settings & demo jobs
 
@@ -494,8 +509,9 @@ Contact messages are the one exception to the "send after the write" rule: `POST
 | Admin extends the warranty | the customer, with the old and new expiry date | — |
 | Admin uses **Email Customer** | the customer | — |
 | Admin replies to a contact message | the visitor who wrote it | — |
+| Customer asks to reset their password | the customer, with a one-time link that works for one hour | — |
 
-Warranty emails are **best effort**: a missing key or a rejected send is logged and never fails the claim, the delivery or the admin action. The exception is `POST /warranties/email/:id` — the admin asked for that email, so a failure comes back as `502` instead of a silent success. `POST /messages/:id/reply` behaves the same way, for the same reason.
+Warranty emails are **best effort**: a missing key or a rejected send is logged and never fails the claim, the delivery or the admin action. The exception is `POST /warranties/email/:id` — the admin asked for that email, so a failure comes back as `502` instead of a silent success. `POST /messages/:id/reply` behaves the same way, for the same reason, and so does the password reset: the customer is waiting for that link, so a failure is reported instead of swallowed.
 
 #### 7. Expiry on a serverless host
 
@@ -568,6 +584,7 @@ The brand marquee is the opposite case and stays **inside** this document as `br
 | **Validation** | Every write endpoint passes its body through a Zod schema before a service sees it. |
 | **Error hygiene** | Handlers throw `ApiError`; the error middleware returns a status and a message, never a stack trace or a database error. |
 | **Cron endpoint** | `/demo/restore` accepts only `Authorization: Bearer <CRON_SECRET>`, Vercel's cron header, or a real admin token. With no secret configured, only an admin can call it. |
+| **Internal mail route** | `POST /mail/reset-password` is closed without `x-internal-key: <INTERNAL_API_KEY>`, so the store cannot be used to email a link of someone else's choosing. |
 | **Demo admin limits** | Catalog routes only. Users, orders, transactions, cart, wishlist, account changes and password/email updates stay blocked. |
 
 > ℹ️ **Known gaps**
@@ -667,6 +684,7 @@ To check end to end: sign in as the demo admin, add a category and edit a produc
 | `MONGODB_URI` | **Yes** | MongoDB Atlas connection string. The server refuses to boot without it. |
 | `NEXT_PUBLIC_CLIENT_URL` | **Yes** | Frontend URL — its `/api/auth/jwks` endpoint verifies every JWT, and it is the expected token issuer. |
 | `CRON_SECRET` | For cron | Long random string guarding `/api/demo/restore`. Generate with `openssl rand -hex 24`. |
+| `INTERNAL_API_KEY` | For password reset | Shared secret the storefront sends as `x-internal-key` to reach `POST /api/mail/reset-password`. The Next.js app holds the same value in its `INTERNAL_API_KEY`. Generate one with `openssl rand -hex 24`. |
 | `DEMO_ADMIN_EMAIL` | No | Email of the shared demo admin. Default `admin@gmail.com`. |
 | `CRON_TIMEZONE` | No | Timezone for the local jobs. Default `Asia/Dhaka`. |
 | `SMTP_HOST` | No | Default `smtp.gmail.com`. |
@@ -683,6 +701,7 @@ PORT=5000
 MONGODB_URI=your_mongodb_atlas_connection_string
 NEXT_PUBLIC_CLIENT_URL=your_frontend_app_url
 CRON_SECRET=your_long_random_string
+INTERNAL_API_KEY=your_long_random_string
 DEMO_ADMIN_EMAIL=admin@gmail.com
 CRON_TIMEZONE=Asia/Dhaka
 

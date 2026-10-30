@@ -425,3 +425,38 @@ export function warrantyExtendedEmail(data: WarrantyExtendedMailInput) {
     }),
   };
 }
+
+/* ── 8. A customer asked for a password reset link ── */
+
+export interface PasswordResetMailInput {
+  brand?: MailBrand;
+  customerName?: string;
+  /** The one-time link better-auth built, with the token already inside it. */
+  url: string;
+}
+
+/**
+ * The email behind "Forgot password".
+ *
+ * The link is not built here: better-auth owns the token, so the URL arrives
+ * ready to use and is only placed inside the button.
+ */
+export function passwordResetEmail(data: PasswordResetMailInput) {
+  const storeName = data.brand?.storeName || DEFAULT_BRAND.storeName;
+  const subject = `Reset your ${storeName} password`;
+
+  const body = `
+    <p style="margin:0 0 14px">Hello ${esc(data.customerName || "there")},</p>
+    <p style="margin:0 0 14px">Someone asked to reset the password for this account. Use the button below to choose a new one.</p>
+    <p style="margin:0 0 14px">The link works once and stops working after one hour.</p>
+    <p style="margin:0">If you did not ask for this, nothing has changed — your current password still works, and you can ignore this email.</p>`;
+
+  return {
+    subject,
+    html: layout("Reset your password", body, {
+      brand: data.brand,
+      actionLabel: "Choose a new password",
+      actionHref: data.url,
+    }),
+  };
+}
