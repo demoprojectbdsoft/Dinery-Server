@@ -17,6 +17,7 @@ import {
   IssuedWarranty,
   notifyWarrantiesIssued,
 } from "../warranty/warranty.notifications";
+import { recordActivity } from "../activity/activity.service";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -300,6 +301,42 @@ async function redeemPoints(
   };
 }
 
+// ─── Notification helpers ─────────────────────────────────────────────────────
+
+/** The short "#ORD-A1B2C3" form the dashboard shows for an order. */
+function shortOrderNumber(id: unknown): string {
+  return `#ORD-${String(id).slice(-6).toUpperCase()}`;
+}
+
+/** "$129.00" — the shop trades in one currency, so no formatting table here. */
+function money(amount: number): string {
+  return `$${amount.toFixed(2)}`;
+}
+
+/** How a payment method is named in the notification feed. */
+const PAYMENT_LABELS: Record<string, string> = {
+  cod: "Cash on delivery",
+  bkash: "bKash",
+  rocket: "Rocket",
+  nagad: "Nagad",
+};
+
+/** "Nihal Ahmed · 2 items · $129.00" for the order notification line. */
+function orderSummary(order: {
+  items: { quantity: number }[];
+  shippingAddress?: { fullName?: string | null } | null;
+  totalAmount: number;
+}): string {
+  const units = order.items.reduce((sum, item) => sum + item.quantity, 0);
+  return [
+    order.shippingAddress?.fullName,
+    `${units} item${units === 1 ? "" : "s"}`,
+    money(order.totalAmount),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 // ─── Create Order ─────────────────────────────────────────────────────────────
 
 export async function createOrder(data: CreateOrderInput, userId: string) {
@@ -315,7 +352,7 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
   // The order, its payment row, its first timeline entry, the stock decrement,
   // the points deduction and the cart reset are one unit of work: either all of
   // them land or none.
-  return withTransaction(async (session) => {
+  const order = await withTransaction(async (session) => {
     // Spending points validates the request and updates the balance, so it runs
     // inside the transaction as well.
     const redemption = pointsRequested
@@ -368,6 +405,37 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
 
     return order;
   });
+
+  // Written after the commit on purpose: a rolled-back order never shows up as
+  // a notification, and a feed problem can never undo a real order.
+  const orderRef = order._id.toString();
+  const shortNumber = shortOrderNumber(order._id);
+
+  await recordActivity({
+    type: "order",
+    title: `New order ${shortNumber}`,
+    detail: orderSummary(order),
+    ref: orderRef,
+  });
+
+  // Cash on delivery is not money in hand yet: its payment row starts as
+  // "pending" and only settles at delivery, so the line has to say the same
+  // thing the transactions screen shows instead of claiming a payment landed.
+  const paymentLabel = PAYMENT_LABELS[order.paymentMethod] || order.paymentMethod;
+  const isCashOnDelivery = order.paymentMethod === "cod";
+
+  await recordActivity({
+    type: "transaction",
+    title: isCashOnDelivery
+      ? `Cash on delivery order ${shortNumber}`
+      : `Payment recorded for ${shortNumber}`,
+    detail: isCashOnDelivery
+      ? `${paymentLabel} · ${money(order.totalAmount)} due on delivery`
+      : `${paymentLabel} · ${money(order.totalAmount)}`,
+    ref: orderRef,
+  });
+
+  return order;
 }
 
 // ─── Get Orders ───────────────────────────────────────────────────────────────
@@ -437,6 +505,8 @@ export async function updateOrderStatus(
   // after it commits, so a rolled-back delivery never announces coverage that
   // does not exist.
   let issuedWarranties: IssuedWarranty[] = [];
+  // The status before this change, needed by the feed outside the transaction.
+  let previousStatus = "";
 
   // The status write, the timeline entry and the settlement side effects must
   // not be left half-applied if one of them fails.
@@ -448,6 +518,7 @@ export async function updateOrderStatus(
       ? await Order.findById(id).session(session)
       : await Order.findById(id);
     if (!order) throw new ApiError(404, "Order not found");
+    previousStatus = order.orderStatus;
 
     // Re-selecting the current stage is a no-op, not a new timeline row.
     if (order.orderStatus === data.orderStatus) return order;
@@ -514,8 +585,29 @@ export async function updateOrderStatus(
     return updated;
   });
 
+  // Cash on delivery settles at the door. applyDelivery just flipped its
+  // payment row to "success", so this is the moment a payment really was
+  // recorded — the checkout only promised one.
+  const wasDelivered = previousStatus === "delivered";
+  if (data.orderStatus === "delivered" && !wasDelivered && updated.paymentMethod === "cod") {
+    await recordActivity({
+      type: "transaction",
+      title: `Payment collected for ${shortOrderNumber(updated._id)}`,
+      detail: `Cash on delivery · ${money(updated.totalAmount)}`,
+      ref: updated._id.toString(),
+    });
+  }
+
   if (issuedWarranties.length) {
     await notifyWarrantiesIssued(updated, issuedWarranties);
+    await recordActivity({
+      type: "warranty",
+      title: `${issuedWarranties.length} warranty record${
+        issuedWarranties.length === 1 ? "" : "s"
+      } issued`,
+      detail: `Order ${shortOrderNumber(updated._id)} was delivered`,
+      ref: updated._id.toString(),
+    });
   }
 
   return updated;
@@ -560,6 +652,17 @@ export async function updateCustomerResponse(
     note: `Customer response: ${data.response}${noteLog}`,
     changedBy: requester?.id,
   });
+
+  // A cancellation is the one status change the admin did not make, so it gets
+  // its own line in the notification feed.
+  if (data.response === "cancelled") {
+    await recordActivity({
+      type: "order_cancelled",
+      title: `Order ${shortOrderNumber(order._id)} cancelled by the customer`,
+      detail: data.note ? `Reason: ${data.note}` : "No reason given",
+      ref: order._id.toString(),
+    });
+  }
 
   return order;
 }

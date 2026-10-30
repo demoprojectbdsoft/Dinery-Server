@@ -4,6 +4,7 @@ import { ApiError } from "../../utils/apiError";
 import { getMailIdentity } from "../site-settings/site-settings.service";
 import { sendMail } from "../../utils/mailer";
 import { visitorReplyEmail } from "../../utils/emailTemplates";
+import { recordActivity } from "../activity/activity.service";
 import { GetMessagesQuery, ReplyMessageInput } from "./message.validator";
 
 /** What the contact page collected, before any email is attempted. */
@@ -17,12 +18,23 @@ export interface NewMessage {
 
 /** Stores the message. It starts as `failed` until an email really went out. */
 export async function saveMessage(data: NewMessage) {
-  return Message.create({
+  const message = await Message.create({
     ...data,
     status: "failed",
     sentTo: "",
     error: "",
   });
+
+  // The admin's bell shows every new enquiry, whether or not the email copy
+  // went out: the message itself is always saved and readable.
+  await recordActivity({
+    type: "message",
+    title: `New message from ${data.name}`,
+    detail: data.subject || data.body.slice(0, 90),
+    ref: data.email,
+  });
+
+  return message;
 }
 
 /** Records that the email copy reached the mail provider. */

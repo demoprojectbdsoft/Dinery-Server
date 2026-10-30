@@ -224,7 +224,7 @@ Both routers apply `requireAuth` to every route. The `:userId` path variants are
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `GET` | `/users` | Admin | Paginated account list |
+| `GET` | `/users` | Admin | Paginated account list, searchable by name, email or a 24-character account id (the bell's new-user line links by id, so it opens exactly that account) |
 | `GET` | `/users/me/export` | Bearer | The caller's own data package (JSON download) |
 | `GET` | `/users/:id` | Bearer | Owner or admin only |
 | `PATCH` | `/users/:id` | Bearer | Admin: any account, any field. Customer: own profile, safe fields only |
@@ -249,7 +249,7 @@ Every route requires a token; the owner is always taken from the token, never fr
 | `GET` | `/warranties/mine` | Bearer | The caller's coverage records |
 | `GET` | `/warranties/order/:orderId/product/:productId` | Bearer | Coverage for one order line |
 | `POST` | `/warranties/claim/:id` | Bearer | Files a claim on an active record. Body: `reason`, `description`, up to 5 `images`; `problem` is optional and legacy |
-| `GET` | `/warranties` | Admin | All warranties, filterable by `status` and by `warrantyType`. Besides the five real statuses, `status=claimed` is a group that returns `claim_submitted`, `under_review` and `resolved` — every record a customer filed a claim on. Untouched (`active`) and closed-by-date (`expired`) records stay out of it. `warrantyType` matches the type copied onto the record when it was issued (`manufacturer-warranty`, `seller-warranty`, `extended-warranty`, `other`, `none`), so it narrows the list to one kind of cover and combines with `status` |
+| `GET` | `/warranties` | Admin | All warranties, filterable by `status`, by `warrantyType` and by `orderId` (the bell's warranty line links that way, so the list opens on the order that was delivered). Besides the five real statuses, `status=claimed` is a group that returns `claim_submitted`, `under_review` and `resolved` — every record a customer filed a claim on. Untouched (`active`) and closed-by-date (`expired`) records stay out of it. `warrantyType` matches the type copied onto the record when it was issued (`manufacturer-warranty`, `seller-warranty`, `extended-warranty`, `other`, `none`), so it narrows the list to one kind of cover and combines with `status` |
 | `PATCH` | `/warranties/claim/:id` | Admin | `mark_under_review`, `resolve` / `reject` (resolution or note required) |
 | `POST` | `/warranties/email/:id` | Admin | Emails the customer about this warranty. The address is read from the record, never from the body |
 | `GET` | `/warranties/expire` | Cron | Closes lapsed warranties. Called by Vercel Cron once a day |
@@ -269,6 +269,14 @@ The contact page writes here; the admin reads it. Creating is not a public endpo
 | `GET` | `/messages` | Admin | Paginated. Query: `status` (`all`, `sent`, `failed`), `search` (name, email or subject), `sort` (`newest`, `oldest`, `name`, `subject`), `page`, `limit` |
 | `POST` | `/messages/:id/reply` | Admin | Emails the visitor. Body: `subject`, `message`. The address is read from the stored message, never from the body |
 | `DELETE` | `/messages/:id` | Admin | |
+
+### Activity feed
+
+The admin notification bell reads this. Lines are written by the API itself the moment something happens — never seeded, mocked or back-filled — one row per new order, recorded payment, delivered order's warranties, customer cancellation, new or deleted account, and contact message. A row stores what changed plus the value the matching screen searches by (an order id, an account id or an email); the app builds the route, so an old line still opens the right page after a rename.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| `GET` | `/activities` | Admin | Newest first. Query: `limit` 1–30 (default 8). Answers `{ activities, serverTime }` — `serverTime` is the API clock at the moment of the answer, so the app can write "3m ago" without trusting the visitor's system clock. Rows delete themselves after 30 days |
 
 ### Mail (internal)
 
