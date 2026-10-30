@@ -89,3 +89,13 @@ export const adminUpdateClaim = catchAsync(async (req, res, next) => {
   );
   apiResponse(res, 200, warranty, "Claim updated");
 });
+
+/**
+ * Scheduled: close every warranty whose expiry date has passed.
+ * Vercel Cron calls this once a day, because a serverless host has no process
+ * that could keep the in-process scheduler alive.
+ */
+export const expireWarranties = catchAsync(async (_req, res) => {
+  const expired = await warrantyService.expireStaleWarranties();
+  apiResponse(res, 200, { expired }, "Lapsed warranties expired");
+});
