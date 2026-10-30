@@ -1,3 +1,4 @@
+import { Address } from "../address/address.model";
 import { Cart } from "../cart/cart.model";
 import { Order } from "../order/order.model";
 import { OrderStatusLog } from "../order-status/order-status.model";
@@ -23,7 +24,7 @@ export async function exportAccountData(userId: string) {
   const orders = await Order.find({ userId }).sort({ createdAt: -1 }).lean();
   const orderIds = orders.map((order) => order._id);
 
-  const [transactions, reviews, wishlist, cart, warranties, orderStatusHistory] =
+  const [transactions, reviews, wishlist, cart, warranties, addresses, orderStatusHistory] =
     await Promise.all([
       Transaction.find({ userId }).sort({ createdAt: -1 }).lean(),
       // Review.userId is a Mixed field, so both the string and ObjectId forms
@@ -32,6 +33,7 @@ export async function exportAccountData(userId: string) {
       Wishlist.find({ userId }).populate("productId", "title price image").lean(),
       Cart.find({ userId }).populate("productId", "title price image").lean(),
       Warranty.find({ userId }).sort({ createdAt: -1 }).lean(),
+      Address.find({ userId }).sort({ createdAt: -1 }).lean(),
       OrderStatusLog.find({ orderId: { $in: orderIds } }).sort({ createdAt: 1 }).lean(),
     ]);
 
@@ -45,5 +47,6 @@ export async function exportAccountData(userId: string) {
     wishlist,
     cart,
     warranties,
+    addresses,
   };
 }
