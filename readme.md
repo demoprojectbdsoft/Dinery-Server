@@ -47,7 +47,7 @@ Sparq-Server is the backend of the [Sparq](https://github.com/demoprojectbdsoft/
 | **Data & business rules** | All prices, discounts, shipping fees, points and totals are computed here, never accepted from the client. |
 | **Authorization** | Every private endpoint verifies the caller and decides what they may read or change. |
 | **Integrity** | Order placement, cancellation and delivery run in a database transaction, so stock, money and points can never partially apply. |
-| **Scheduled jobs** | One daily job restores demo-admin edits and expires lapsed warranties. |
+| **Scheduled jobs** | Two daily jobs: one restores demo-admin edits, one expires lapsed warranties. |
 
 **What this server does not own**
 
@@ -79,11 +79,13 @@ src/
 ├── middlewares/
 │   ├── auth.middleware.ts     requireAuth — JWT (JWKS) with a session-token fallback
 │   ├── role.middleware.ts     requireRole("admin") — role gate
+│   ├── cron.middleware.ts     requireCronOrAdmin — CRON_SECRET or Vercel's cron header
 │   ├── error.middleware.ts    one JSON error shape for the whole API
 │   └── notFound.middleware.ts 404 for unknown routes
 ├── modules/
 │   ├── cart/                  cart items
 │   ├── category/              top-level categories
+│   ├── contact/               contact-page messages, emailed to the store inbox
 │   ├── demo/                  demo-admin write tracking + restore endpoint
 │   ├── order/                 order placement, status flow, cancellation, delivery
 │   ├── order-status/          status history log
@@ -104,6 +106,8 @@ src/
     ├── authz.ts               identity / ownership helpers
     ├── transactions.ts        withTransaction() with standalone fallback
     ├── ids.ts                 ObjectId helpers
+    ├── emailTemplates.ts      every email body (claims, coverage, contact page)
+    ├── mailer.ts              Resend HTTPS sender, timeout, never throws
     └── roles.ts               role normalisation
 ```
 
@@ -222,9 +226,17 @@ Both routers apply `requireAuth` to every route. The `:userId` path variants are
 |---|---|---|---|
 | `GET` | `/warranties/mine` | Bearer | The caller's coverage records |
 | `GET` | `/warranties/order/:orderId/product/:productId` | Bearer | Coverage for one order line |
-| `POST` | `/warranties/claim/:id` | Bearer | Customer files a claim (`reason`, `description`, up to 5 images; optional `problem`) |
+| `POST` | `/warranties/claim/:id` | Bearer | Files a claim, or answers when the store asked for info. Body: `reason`, `description`, up to 5 `images`; `problem` is optional and legacy |
 | `GET` | `/warranties` | Admin | All warranties, filterable |
-| `PATCH` | `/warranties/claim/:id` | Admin | `mark_under_review`, `request_info`, `resolve`, `reject` |
+| `PATCH` | `/warranties/claim/:id` | Admin | `mark_under_review`, `request_info` (note required), `resolve` / `reject` (resolution or note required) |
+| `POST` | `/warranties/email/:id` | Admin | Emails the customer about this warranty. The address is read from the record, never from the body |
+| `GET` | `/warranties/expire` | Cron | Closes lapsed warranties. Called by Vercel Cron once a day |
+
+### Contact
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| `POST` | `/contact` | Public | Contact-page message. Body: `name`, `email`, `message` (10–3000 characters), optional `subject` and `department` (`support` or `contact`). Emailed to `CONTACT_INBOX`, or `STORE_INBOX` when that is not set |
 
 ### Store settings & demo jobs
 
@@ -341,13 +353,86 @@ Tiers      silver < 1,000 · gold 1,000 · platinum 4,000 · diamond 10,000
 
 ### Warranty coverage & claims
 
-- A warranty is created **only on delivery**, one per order line, using the product's `warrantyPeriodMonths`, `warrantyType` and `warrantyTerms`.
-- Those three values are **copied onto the record** at creation. The claim screens read the live product when it still exists and fall back to the copy otherwise, so coverage survives a product edit or delete.
-- Statuses: `active` → `claim_submitted` → `under_review` / `info_requested` → `resolved`, plus `expired`.
-- A customer can file one claim per warranty with a reason, a description and up to 5 images. `problem` is still accepted but optional — when sent it must be one of `not_working`, `stopped_working`, `damaged_on_arrival`, `battery_issue`, `display_issue`, `missing_parts`, `other`, and it is only saved if present. Claims filed before the form was simplified keep their code.
-- An admin then moves the claim forward with a note or a resolution. `reject` closes the warranty as `expired`.
-- A daily job (`expireStaleWarranties`) marks every warranty whose expiry date has passed as `expired`.
-- Cancelling an order voids the coverage it created.
+#### 1. Where coverage comes from
+
+- Coverage is **never created at checkout**. It is issued when an order reaches `delivered` — one record per order line.
+- A line is skipped when the product has `warrantyType: "none"` or `warrantyPeriodMonths: 0`, so a "no warranty" product never leaves an empty record behind.
+- `expiryDate` = delivery date + `warrantyPeriodMonths`, clamped to the last valid day of the month (31 Jan + 1 month → 28/29 Feb).
+- `warrantyType`, `warrantyPeriodMonths` and `warrantyTerms` are **copied onto the record**. The screens prefer the live product and fall back to the copy, so coverage survives a product edit or delete.
+- Creation is idempotent for one `(user, product, order)`: delivering the same order twice cannot issue a second record.
+
+#### 2. The five warranty types
+
+The type is a label on the record plus free-text `warrantyTerms`. **The claim pipeline is identical for all of them** — a type only changes the wording a customer and an admin read.
+
+| `warrantyType` | Shown as | What it means here |
+|---|---|---|
+| `manufacturer-warranty` | Manufacturer warranty | Repairs or replacement are the brand's responsibility; the shop records the claim and passes it on |
+| `seller-warranty` | Seller warranty | The shop itself covers the repair or replacement |
+| `extended-warranty` | Extended warranty | Extra cover bought on top of the standard period |
+| `other` | Other warranty | Anything the shop describes in the terms text |
+| `none` | No warranty | No record is created at all, and the period is forced to `0` on the product |
+
+#### 3. Status lifecycle
+
+| From | Who | Action | Becomes |
+|---|---|---|---|
+| `active` | customer | files a claim | `claim_submitted` |
+| `claim_submitted` · `under_review` · `info_requested` | admin | `mark_under_review` | `under_review` |
+| `claim_submitted` · `under_review` · `info_requested` | admin | `request_info` — a note is required | `info_requested` |
+| `info_requested` | customer | sends a reply | `claim_submitted` |
+| any open claim | admin | `resolve` — resolution or note required | `resolved` |
+| any open claim | admin | `reject` — resolution or note required | `expired` |
+| `active` | system | expiry date has passed | `expired` |
+| any open claim | system | the order is cancelled or returned | `expired` |
+
+`active` means "no claim yet". `resolved` and `expired` are closed for good: no action can move them again, and the API refuses the attempt with a message that says why.
+
+#### 4. What the customer sees
+
+1. After delivery, each covered line on the order page shows its warranty with the type, duration and expiry date.
+2. On an `active` warranty the **Claim** form asks for a reason, a description and up to 5 photos. (The old `problem` dropdown was removed from the form; the API still accepts the legacy codes.)
+3. Sending it turns the record into `claim_submitted` and emails the store inbox.
+4. When the store asks for more information the badge reads *Info Requested* and the same form becomes **Your Reply**: the reason is pre-filled, the box starts empty, and the reply is appended to `claimReplies` while the first description and photos stay untouched.
+5. `resolved` shows the outcome the admin wrote; `expired` explains that the warranty or the claim is closed.
+
+#### 5. What the admin does
+
+1. *Dashboard → Warranties* lists every record. Clicking a row opens one dialog with the coverage, the terms, the claim text, the photos and the customer's replies.
+2. The admin fills an **Internal Admin Note** and **Resolution Details**, then picks one of four actions: mark under review, ask for more info, resolve, or reject.
+3. The buttons lock while a request is in flight, and the API enforces the same rules a second time, so two decisions can never race each other.
+4. **Email Customer** opens a composer that is already filled in from the claim — name, product, order number, reason, description, latest reply and coverage — and sends it to the address stored on the record.
+
+#### 6. Emails
+
+Every message is sent **after** the database write, through Resend's HTTPS API with an 8 second timeout.
+
+| Trigger | Recipient | Reply-to |
+|---|---|---|
+| Customer files a claim | `STORE_INBOX` | the customer |
+| Customer replies to `info_requested` | `STORE_INBOX` | the customer |
+| Admin moves a claim | the customer | — |
+| Order delivered and coverage issued | the customer, one email per item | — |
+| Admin uses **Email Customer** | the customer | — |
+
+Warranty emails are **best effort**: a missing key or a rejected send is logged and never fails the claim, the delivery or the admin action. The exception is `POST /warranties/email/:id` — the admin asked for that email, so a failure comes back as `502` instead of a silent success.
+
+#### 7. Expiry on a serverless host
+
+`GET /api/warranties/expire` closes every warranty whose `expiryDate` has passed. It is guarded by `requireCronOrAdmin`, which accepts `Authorization: Bearer <CRON_SECRET>` or Vercel's own `x-vercel-cron: 1` header.
+
+- On Vercel the sweep has to be **called by the platform**: `vercel.json` lists it as a daily cron (`30 18 * * *`, 00:30 Asia/Dhaka), because a serverless function keeps no process alive to schedule anything.
+- Anywhere else, `node-cron` runs the same sweep at 00:30 on its own schedule, separate from the demo restore, so one failing job can never skip the other.
+- Reads stay honest even if the sweep has not run: `withEffectiveStatus` reports a lapsed `active` record as `expired`, and `submitClaim` refuses a claim whose expiry date has passed. The sweep is what makes the stored status agree with the date.
+
+#### 8. Guards worth knowing
+
+- A claim is refused when the record is not `active` (or `info_requested` for a reply), when it has expired, or when it belongs to somebody else.
+- `reason` and `description` are trimmed, so a message made only of spaces is rejected instead of being stored blank.
+- At most 5 images per claim; a reply that adds photos to a full set keeps the newest five.
+- `request_info` without a note, and `resolve` / `reject` without any resolution or note, are refused — the customer must never see an unexplained status.
+- An empty admin note never overwrites the previous one.
+- Cancelling or returning a delivered order moves every open record of that order to `expired`, so goods that went back cannot still be claimed.
 
 ### Reviews & ratings
 
@@ -481,7 +566,12 @@ To check end to end: sign in as the demo admin, add a category and edit a produc
 | `NEXT_PUBLIC_CLIENT_URL` | **Yes** | Frontend URL — its `/api/auth/jwks` endpoint verifies every JWT, and it is the expected token issuer. |
 | `CRON_SECRET` | For cron | Long random string guarding `/api/demo/restore`. Generate with `openssl rand -hex 24`. |
 | `DEMO_ADMIN_EMAIL` | No | Email of the shared demo admin. Default `admin@gmail.com`. |
-| `CRON_TIMEZONE` | No | Timezone for the daily job. Default `Asia/Dhaka`. |
+| `CRON_TIMEZONE` | No | Timezone for the local jobs. Default `Asia/Dhaka`. |
+| `RESEND_API_KEY` | For email | Resend API key. Without it nothing is sent: warranty emails are skipped and logged, and the contact form answers `503`. |
+| `MAIL_FROM` | For email | Verified sender, e.g. `Sparq <orders@yourdomain.com>`. Resend rejects a domain that is not verified. |
+| `STORE_INBOX` | For email | Where claim and reply notifications are delivered. |
+| `CONTACT_INBOX` | No | Separate inbox for the contact page. Falls back to `STORE_INBOX`. |
+| `STORE_NAME` | No | Name used in email subjects and bodies. Default `Sparq`. |
 
 ```env
 PORT=5000
@@ -490,6 +580,11 @@ NEXT_PUBLIC_CLIENT_URL=your_frontend_app_url
 CRON_SECRET=your_long_random_string
 DEMO_ADMIN_EMAIL=admin@gmail.com
 CRON_TIMEZONE=Asia/Dhaka
+RESEND_API_KEY=re_your_key
+MAIL_FROM=Sparq <orders@yourdomain.com>
+STORE_INBOX=hello@yourdomain.com
+CONTACT_INBOX=contact@yourdomain.com
+STORE_NAME=Sparq
 ```
 
 > ⚠️ Never commit `.env` or `.env.local`. A `CRON_SECRET` leak lets whoever holds it trigger a demo restore.
@@ -520,13 +615,16 @@ The API is then available at [http://localhost:5000](http://localhost:5000).
 
 > 💡 The [Sparq frontend](https://github.com/demoprojectbdsoft/Sparq-Electronics-Store) must be running at `NEXT_PUBLIC_CLIENT_URL`, otherwise no token can be verified and every private route returns `401`.
 
-**Deploying to Vercel** — set the same variables in the project settings and add the daily cron:
+**Deploying to Vercel** — set the same variables in the project settings and keep both daily crons:
 
 ```json
-"crons": [{ "path": "/api/demo/restore", "schedule": "0 20 * * *" }]
+"crons": [
+  { "path": "/api/demo/restore", "schedule": "0 18 * * *" },
+  { "path": "/api/warranties/expire", "schedule": "30 18 * * *" }
+]
 ```
 
-The schedule is UTC (about 2 AM Asia/Dhaka). On Vercel's Hobby plan a cron runs once a day with up to ±1 hour of drift; when the server runs elsewhere, the built-in `node-cron` job covers it.
+Schedules are UTC, so `18:00` is midnight and `18:30` is 00:30 in Asia/Dhaka. On Vercel's Hobby plan a cron runs once a day with up to ±1 hour of drift; when the server runs elsewhere, the built-in `node-cron` jobs cover it. Both are listed because a serverless function has no long-lived process to schedule anything itself.
 
 ---
 
@@ -539,7 +637,9 @@ The schedule is UTC (about 2 AM Asia/Dhaka). On Vercel's Hobby plan a cron runs 
 | Orders, status flow, status history | ✅ Complete |
 | Payments & transactions | ✅ Complete (simulated gateway) |
 | Loyalty points — earning, redemption, refunds, tiers | ✅ Complete |
-| Warranties — issuance with copied terms, claims, admin review, expiry | ✅ Complete |
+| Warranties — issuance with copied terms, claims and customer replies, admin review, expiry sweep | ✅ Complete |
+| Transactional email — claims, coverage, admin messages and the contact page, through Resend | ✅ Complete |
+| Contact page messages | ✅ Complete |
 | Reviews & rating recalculation | ✅ Complete |
 | Store settings, branding, About page copy & opening hours | ✅ Complete |
 | Demo admin sandbox with daily restore | ✅ Complete |
