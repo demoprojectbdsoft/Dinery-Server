@@ -9,6 +9,7 @@ export const TRACKED = [
   "subcategories",
   "products",
   "slides",
+  "promos",
   "productreviews",
   "orders",
   "orderstatuslogs",

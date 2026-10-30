@@ -92,6 +92,7 @@ src/
 │   ├── order/                 order placement, status flow, cancellation, delivery
 │   ├── order-status/          status history log
 │   ├── product/               product catalog
+│   ├── promo/                 homepage promo banners (tiles and the wide strip)
 │   ├── review/                product reviews and rating recalculation
 │   ├── site-settings/         store-wide branding, shipping and maintenance flag
 │   ├── slide/                 homepage hero slider
@@ -171,6 +172,10 @@ Base URL: `/api`. All replies use the same envelope: `{ success, message, data }
 | `POST` | `/slides` | Admin | |
 | `PATCH` | `/slides/:id` | Admin | |
 | `DELETE` | `/slides/:id` | Admin | |
+| `GET` | `/promos` | Public | Promo banners, filtered by `isActive` and `placement` (`tile` or `strip`) |
+| `POST` | `/promos` | Admin | `name` is required; `placement` defaults to `tile` and `isActive` to `false` |
+| `PATCH` | `/promos/:id` | Admin | Any field, so a single switch can be flipped without resending the banner |
+| `DELETE` | `/promos/:id` | Admin | |
 
 ### Cart & wishlist
 
@@ -542,12 +547,15 @@ The newest copy of each pair is kept (a second submit is usually a corrected rat
 - **Delete guard** — the whole delete is cancelled if the category or any of its subcategories still has products.
 - **Cart rows** — one row per item behind a compound unique index on `{ userId, productId }`, with the subtotal computed live.
 - **Slider** — a slide references a real product; price, image and discount are read live. When a slide's countdown ends, the product's discount returns to 0 and its price to the original.
+- **Promo banners are their own collection.** Each row carries a `name` (for the dashboard), a `placement` of `tile` or `strip`, an `order` and an `isActive` flag, plus the copy, image, link and badge the homepage shows. A banner reaches the storefront only when `isActive` is true **and** `image` is set, so a half-filled banner never leaves a gap; an empty `href` falls back to `/shop`. The copy is free text typed by the owner — nothing on the server names a product type — and the collection is in the demo-restore `TRACKED` list, so the nightly reset undoes a demo admin's banners too.
 - **Stock tracking is optional.** A product saved with **no `stockQuantity`** is not stock-tracked: nothing checks it, nothing limits how many can be bought, checkout does not decrement it and a cancellation does not add anything back. Only a saved number turns stock rules on, and `formatProduct` reports such a product as available whatever an old flag says. The order and cancellation updates filter on `stockQuantity: { $ne: null }`, because `$inc` on a missing field would write `NaN`. Sending `stockQuantity: null` on an update clears a stored number, which puts the product back into the untracked state.
 - **Brand for a manufacturer warranty.** When `warrantyType` is `manufacturer-warranty` (the default), the product must carry a `Brand` entry in `specifications` — the claim is filed with the brand, so the name is not optional. A supporting type — seller warranty, extended or other — does not need it.
 
 ### Store settings
 
 One document drives the whole storefront: branding, fonts, palettes, logos, contact details, **opening hours** (multi-line, one day per line), the **About page copy** (`about.headline`, `intro`, `headquartersNote`, `openingHoursNote`, `ctaTitle`, `ctaDescription`), shipping fees, free-shipping threshold, currency, default browse mode and the `maintenanceMode` flag. It is readable without a token so the storefront can render, and only an admin can change it. Empty About fields fall back to the store's built-in wording on the frontend. The document's own defaults are written for any kind of catalog — *Sparq - Premium Online Store*, *We Provide High Quality Products* — so a fresh store is never described as an electronics shop before the admin edits the text.
+
+Homepage promo banners are deliberately **not** part of this document: each banner is its own row in the `promos` collection, so they can be named, ordered, switched on one by one and kept in any number. See the business rules below.
 
 ---
 
