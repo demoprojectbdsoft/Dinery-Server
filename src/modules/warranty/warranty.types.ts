@@ -100,3 +100,18 @@ export function hasWarrantyCoverage(
   if (!describeWarrantyType(type).hasCoverage) return false;
   return Number(months) > 0;
 }
+
+/**
+ * How many times one record may be extended.
+ *
+ * A warranty covers a repair; it is not a subscription. Three extensions is
+ * enough to apologise for a long repair, and small enough that a record can
+ * never quietly become permanent cover.
+ */
+export const MAX_WARRANTY_EXTENSIONS = 3;
+
+/** Extension slots a record still has. Never negative. */
+export function extensionsLeft(extensions?: { months?: number }[] | null): number {
+  const used = Array.isArray(extensions) ? extensions.length : 0;
+  return Math.max(0, MAX_WARRANTY_EXTENSIONS - used);
+}

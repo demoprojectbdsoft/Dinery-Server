@@ -20,8 +20,10 @@ import {
 } from "./warranty.notifications";
 import {
   describeWarrantyType,
+  extensionsLeft,
   hasWarrantyCoverage,
   isWarrantyType,
+  MAX_WARRANTY_EXTENSIONS,
 } from "./warranty.types";
 
 /**
@@ -426,6 +428,15 @@ export async function extendWarranty(
     throw new ApiError(400, "At most 60 months can be added at a time");
   }
 
+  // A warranty covers a repair, it is not a subscription. The record keeps a
+  // short history of extensions and refuses to grow past that history.
+  if ((warranty.extensions?.length || 0) >= MAX_WARRANTY_EXTENSIONS) {
+    throw new ApiError(
+      400,
+      `This warranty has already been extended ${MAX_WARRANTY_EXTENSIONS} times, which is the most we allow`
+    );
+  }
+
   // Nothing was promised, so there is nothing to lengthen.
   if (!hasWarrantyCoverage(warranty.warrantyType, warranty.warrantyPeriodMonths)) {
     throw new ApiError(
@@ -506,6 +517,10 @@ function formatWarranty(w: any) {
           createdAt: entry.createdAt,
         }))
       : [],
+    // How many extensions the record may still take, so a screen can disable
+    // the button without hardcoding the limit.
+    maxExtensions: MAX_WARRANTY_EXTENSIONS,
+    extensionsLeft: extensionsLeft(w.extensions),
     claimProblem: w.claimProblem,
     claimReason: w.claimReason,
     claimDescription: w.claimDescription,

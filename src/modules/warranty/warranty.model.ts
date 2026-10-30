@@ -1,4 +1,15 @@
 import { Schema, model } from "mongoose";
+import { MAX_WARRANTY_EXTENSIONS } from "./warranty.types";
+
+// One extension, kept as history so any extra months can be explained later.
+const extensionSchema = new Schema({
+  months: { type: Number, required: true },
+  previousExpiryDate: { type: Date, required: true },
+  newExpiryDate: { type: Date, required: true },
+  reason: { type: String, required: true },
+  extendedBy: { type: String },
+  createdAt: { type: Date, default: Date.now },
+});
 
 const warrantySchema = new Schema(
   {
@@ -28,16 +39,16 @@ const warrantySchema = new Schema(
 
     // Every extension an admin granted, oldest first. Kept as history, so any
     // extra months on a record can always be explained later.
-    extensions: [
-      {
-        months: { type: Number, required: true },
-        previousExpiryDate: { type: Date, required: true },
-        newExpiryDate: { type: Date, required: true },
-        reason: { type: String, required: true },
-        extendedBy: { type: String },
-        createdAt: { type: Date, default: Date.now },
+    // The length is capped here as a last resort: the service checks first and
+    // explains why, this only stops a record being saved past the limit.
+    extensions: {
+      type: [extensionSchema],
+      default: [],
+      validate: {
+        validator: (list: unknown[]) => list.length <= MAX_WARRANTY_EXTENSIONS,
+        message: `A warranty can be extended at most ${MAX_WARRANTY_EXTENSIONS} times`,
       },
-    ],
+    },
     // Claim information
     // What went wrong, picked from a fixed list (see warranty.validator.ts).
     claimProblem: { type: String },

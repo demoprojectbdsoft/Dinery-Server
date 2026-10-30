@@ -426,8 +426,10 @@ An `expired` record also stores **why** it closed, because the same status cover
 
 `PATCH /api/warranties/:id/extend` (admin) takes `{ months: 1–60, reason }` and adds real time:
 
+- A record can be extended **at most 3 times** (`MAX_WARRANTY_EXTENSIONS`). The service refuses the fourth and the model validator refuses to save it; both dashboards show `n of 3 used` so the limit is never a surprise.
 - The months are counted from **whichever is later** — the stored expiry date or today — so extending a lapsed warranty gives it months ahead instead of months already in the past.
 - The extension is appended to `extensions[]` with the previous date, the new date, the reason and the admin's email, so the extra months can always be explained.
+- `warrantyPeriodMonths` keeps the **original** promise; only `expiryDate` moves. Screens show the real total (`18 months (+6 extended)`) so a longer date is never unexplained.
 - A lapsed record (`closedReason: date`, no claim) becomes `active` again. A rejected or void record keeps its status.
 - Records with no coverage cannot be extended, and neither can records on a cancelled order.
 - The customer is emailed the old date, the new date and the reason (best effort, like every warranty email).
@@ -444,7 +446,7 @@ An `expired` record also stores **why** it closed, because the same status cover
 
 1. *Dashboard → Warranties* lists every record. Clicking a row opens one dialog with the coverage, the terms, the claim text, the photos and the customer's replies.
 2. The admin fills an **Internal Admin Note** and **Resolution Details**, then picks one of four actions: mark under review, ask for more info, resolve, or reject.
-3. **Extend** adds months to the coverage with a required reason, and the dialog lists every extension already granted.
+3. **Extend** adds months to the coverage with a required reason, up to three times, and the dialog lists every extension already granted with an `n of 3 used` counter.
 4. The buttons lock while a request is in flight, and the API enforces the same rules a second time, so two decisions can never race each other.
 5. **Email Customer** opens a composer that is already filled in from the claim — name, product, order number, reason, description, latest reply and coverage — and sends it to the address stored on the record.
 
