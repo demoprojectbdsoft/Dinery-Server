@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { objectIdSchema } from "../../utils/ids";
+// The warranty type list lives with the warranty rules, so the product form and
+// the claim rules can never disagree about which codes exist.
+import { WARRANTY_TYPE_VALUES } from "../warranty/warranty.types";
 
 const objectId = objectIdSchema("Invalid ID");
 
@@ -32,8 +35,8 @@ export const createProductSchema = z.object({
   specifications: z.record(z.string(), z.any()).optional(),
   isFeatured: z.boolean().optional(),
   offerEndDate: z.coerce.date().optional().nullable(),
-  warrantyPeriodMonths: z.number().int().nonnegative().optional(),
-  warrantyType: z.enum(["manufacturer-warranty", "seller-warranty", "extended-warranty", "other", "none"]).optional(),
+  warrantyPeriodMonths: z.number().int().nonnegative().max(120).optional(),
+  warrantyType: z.enum(WARRANTY_TYPE_VALUES).optional(),
   warrantyTerms: z.string().max(1000).optional(),
 });
 

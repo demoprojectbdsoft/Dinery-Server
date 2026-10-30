@@ -5,6 +5,7 @@ import { SubCategory } from "../subcategory/subcategory.model";
 import { ApiError } from "../../utils/apiError";
 import { idVariants } from "../../utils/ids";
 import { CreateProductInput, UpdateProductInput, GetProductsQuery } from "./product.validator";
+import type { WarrantyType } from "../warranty/warranty.types";
 
 /** Sort keys the shop and dashboards can ask for. */
 const SORT_OPTIONS: Record<string, Record<string, 1 | -1>> = {
@@ -101,6 +102,39 @@ function formatProduct(product: any, ratingsMap?: Map<string, any>) {
   };
 }
 
+/**
+ * The two warranty fields describe one promise, so they are settled together:
+ *
+ *   - "No warranty" drops the period, so a leftover number can never create a
+ *     record when the order is delivered.
+ *   - A period of 0 with a covering type is stored as "No warranty" too,
+ *     because cover with no end date is not something anyone can honour.
+ *   - "Other" is whatever the terms text says, so it needs that text.
+ */
+function warrantyFieldsFor(
+  data: { warrantyTerms?: string },
+  months: number | undefined,
+  type: string | undefined
+): { warrantyType: WarrantyType; warrantyPeriodMonths: number } {
+  const period = Number(months ?? 0);
+
+  if (type === "none" || period <= 0) {
+    return { warrantyType: "none", warrantyPeriodMonths: 0 };
+  }
+
+  if (type === "other" && !String(data.warrantyTerms ?? "").trim()) {
+    throw new ApiError(
+      400,
+      "Describe the coverage in the warranty terms, or choose a different warranty type"
+    );
+  }
+
+  return {
+    warrantyType: (type ?? "manufacturer-warranty") as WarrantyType,
+    warrantyPeriodMonths: period,
+  };
+}
+
 export async function createProduct(data: CreateProductInput) {
   const category = await Category.findById(data.categoryId);
   if (!category) throw new ApiError(404, "Category not found");
@@ -115,10 +149,10 @@ export async function createProduct(data: CreateProductInput) {
   const existing = await Product.findOne({ slug: data.slug });
   if (existing) throw new ApiError(409, "Slug already in use");
 
-  // "No warranty" means no coverage, so the period is dropped with it. Without
-  // this a product could be saved as `none` with 12 months and still create a
-  // warranty record on delivery, because records only look at the period.
-  if (data.warrantyType === "none") data.warrantyPeriodMonths = 0;
+  // The warranty fields only make sense together: see applyWarrantyRules.
+  const warranty = warrantyFieldsFor(data, data.warrantyPeriodMonths, data.warrantyType);
+  data.warrantyType = warranty.warrantyType;
+  data.warrantyPeriodMonths = warranty.warrantyPeriodMonths;
 
   const product = await Product.create(data);
   return formatProduct(product);
@@ -273,15 +307,29 @@ export async function updateProduct(id: string, data: UpdateProductInput) {
   // Only the fields that were sent are in `data`, so the two warranty fields are
   // judged on the combination the product will end up with.
   const nextType = data.warrantyType ?? current.warrantyType;
-  if (nextType === "none") {
-    data.warrantyPeriodMonths = 0;
-  } else if ((data.warrantyPeriodMonths ?? 0) > 0 && current.warrantyType === "none") {
-    // Adding a period to a product marked as uncovered is a contradiction.
+  const nextMonths = data.warrantyPeriodMonths ?? current.warrantyPeriodMonths;
+  const nextTerms = String(data.warrantyTerms ?? current.warrantyTerms ?? "");
+
+  // Adding a period to a product marked as uncovered is a contradiction the
+  // admin has to resolve by choosing a type.
+  if (
+    current.warrantyType === "none" &&
+    !data.warrantyType &&
+    Number(data.warrantyPeriodMonths ?? 0) > 0
+  ) {
     throw new ApiError(
       400,
       "This product is marked No warranty. Choose a warranty type before setting a period."
     );
   }
+
+  const warranty = warrantyFieldsFor(
+    { ...data, warrantyTerms: nextTerms },
+    nextMonths,
+    nextType
+  );
+  data.warrantyType = warranty.warrantyType;
+  data.warrantyPeriodMonths = warranty.warrantyPeriodMonths;
 
   const product = await Product.findByIdAndUpdate(id, data, { new: true });
   if (!product) throw new ApiError(404, "Product not found");

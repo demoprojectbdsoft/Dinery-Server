@@ -223,3 +223,38 @@ export function contactMessageEmail(data: ContactMessageMailInput) {
 
   return { subject, html: layout(subject, body) };
 }
+
+/* ── 6. An admin added months to a warranty, so the customer is told ── */
+
+export interface WarrantyExtendedMailInput {
+  storeName: string;
+  customerName?: string;
+  productTitle?: string;
+  orderNumber?: string;
+  typeLabel?: string;
+  months: number;
+  previousExpiryDate: string;
+  newExpiryDate: string;
+  reason: string;
+}
+
+export function warrantyExtendedEmail(data: WarrantyExtendedMailInput) {
+  const item = data.productTitle || `order ${data.orderNumber || ""}`.trim();
+  const subject = `Warranty extended for ${item} — ${data.storeName}`;
+  const months = `${data.months} month${data.months === 1 ? "" : "s"}`;
+
+  const body = `
+    <p style="margin:0 0 14px">Hello ${esc(data.customerName || "there")},</p>
+    <p style="margin:0 0 14px">We have extended the warranty on <strong>${esc(
+      item
+    )}</strong> by <strong>${esc(months)}</strong>. Nothing is needed from you — the same claim form is used, and it will accept claims until the new date.</p>
+    ${row("Warranty type", data.typeLabel)}
+    ${row("Order number", data.orderNumber)}
+    ${row("Previous expiry", data.previousExpiryDate)}
+    ${row("New expiry", data.newExpiryDate)}
+    ${row("Extra cover", months)}
+    ${row("Reason", data.reason)}
+    <p style="margin:0">You can check this at any time under My Account → Orders → Warranty.</p>`;
+
+  return { subject, html: layout(subject, body) };
+}

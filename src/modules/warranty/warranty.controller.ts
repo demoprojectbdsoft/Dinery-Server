@@ -7,6 +7,7 @@ import {
   submitWarrantyClaimSchema,
   adminUpdateClaimSchema,
   emailWarrantySchema,
+  extendWarrantySchema,
   getWarrantiesQuerySchema,
 } from "./warranty.validator";
 
@@ -116,4 +117,22 @@ export const emailCustomer = catchAsync(async (req, res, next) => {
     parsed.data
   );
   apiResponse(res, 200, result, `Email sent to ${result.to}`);
+});
+
+/**
+ * Admin: add months to a warranty. The reason is required, and the admin's own
+ * email is stored with the extension so the history says who granted it.
+ */
+export const extendWarranty = catchAsync(async (req, res, next) => {
+  const parsed = extendWarrantySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return next(new ApiError(400, parsed.error.issues[0].message));
+  }
+
+  const warranty = await warrantyService.extendWarranty(
+    req.params.id as string,
+    parsed.data,
+    { email: req.user?.email }
+  );
+  apiResponse(res, 200, warranty, "Warranty extended");
 });

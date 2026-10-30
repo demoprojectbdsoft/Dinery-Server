@@ -1,20 +1,28 @@
 import { ClientSession } from "mongoose";
 import { Warranty } from "./warranty.model";
 import { Product } from "../product/product.model";
+import { Order } from "../order/order.model";
 import { ApiError } from "../../utils/apiError";
 import { refIdString } from "../../utils/ids";
 import {
   SubmitWarrantyClaimInput,
   AdminUpdateClaimInput,
   EmailWarrantyInput,
+  ExtendWarrantyInput,
   GetWarrantiesQuery,
 } from "./warranty.validator";
 import {
   IssuedWarranty,
   notifyClaimSubmitted,
   notifyClaimUpdated,
+  notifyWarrantyExtended,
   sendWarrantyMessage,
 } from "./warranty.notifications";
+import {
+  describeWarrantyType,
+  hasWarrantyCoverage,
+  isWarrantyType,
+} from "./warranty.types";
 
 /**
  * Statuses that still have a claim an admin may move forward. `active` has no
@@ -37,13 +45,35 @@ function addMonthsClamped(from: Date, months: number): Date {
 }
 
 /**
+ * A warranty only exists because the store delivered the goods. Once the order
+ * is cancelled (a returned delivery is cancelled too) the coverage is gone for
+ * good, whatever the record itself says — a claim rejected before the return
+ * still reads "rejected", so the closed reason alone cannot be trusted here.
+ */
+async function assertOrderStillCovered(orderId: any) {
+  const id = refIdString(orderId);
+  if (!id) return;
+
+  const order: any = await Order.findById(id).select("orderStatus").lean();
+  if (order && order.orderStatus === "cancelled") {
+    throw new ApiError(
+      400,
+      "This warranty was closed because the order was cancelled or returned"
+    );
+  }
+}
+
+/**
  * Report an "active" warranty that has already passed its expiry date as
  * expired. The status column is only rewritten by the daily sweep, so this
  * keeps responses honest on hosts where the sweep has not run yet.
+ *
+ * The reason is filled in as well, so the screens can say "expired on this
+ * date" instead of showing a bare Expired badge.
  */
 function withEffectiveStatus<T extends { status?: string; expiryDate?: any }>(w: T): T {
   if (w?.status === "active" && w.expiryDate && new Date(w.expiryDate) < new Date()) {
-    return { ...w, status: "expired" };
+    return { ...w, status: "expired", closedReason: "date" };
   }
   return w;
 }
@@ -72,8 +102,12 @@ export async function createWarrantiesForOrder(
       ? await Product.findById(productId).session(session).lean()
       : await Product.findById(productId).lean();
     if (!product) continue;
-    const months = product.warrantyPeriodMonths;
-    if (!months || months <= 0) continue;
+    const months = Number(product.warrantyPeriodMonths || 0);
+    // Coverage needs both halves of the promise: a type that includes coverage
+    // and a period to count from. A "No warranty" product never leaves an
+    // empty record behind, and a leftover type with 0 months is ignored too.
+    if (!hasWarrantyCoverage(product.warrantyType, months)) continue;
+    const warrantyType = isWarrantyType(product.warrantyType) ? product.warrantyType : "other";
 
     // One warranty per (user, product, order) — never duplicate on re-delivery.
     const existing = session
@@ -93,14 +127,14 @@ export async function createWarrantiesForOrder(
       status: "active",
       // Snapshot the product's warranty terms. The claim screens read these
       // when the product itself is no longer available.
-      warrantyType: product.warrantyType,
+      warrantyType,
       warrantyPeriodMonths: months,
       warrantyTerms: product.warrantyTerms,
     });
     await warranty.save({ session });
     created.push({
       productTitle: product.title,
-      warrantyType: product.warrantyType,
+      warrantyType,
       warrantyPeriodMonths: months,
       warrantyTerms: product.warrantyTerms,
       expiryDate,
@@ -118,7 +152,7 @@ export async function expireStaleWarranties(): Promise<number> {
       status: "active",
       expiryDate: { $lte: new Date() },
     },
-    { $set: { status: "expired" } }
+    { $set: { status: "expired", closedReason: "date" } }
   );
   return result.modifiedCount || 0;
 }
@@ -137,7 +171,9 @@ export async function voidWarrantiesForOrder(
       orderId,
       status: { $in: ["active", "claim_submitted", "under_review", "info_requested"] },
     },
-    { $set: { status: "expired" } },
+    // "void" is its own reason: these goods went back, so no extension can
+    // ever bring the coverage back to life.
+    { $set: { status: "expired", closedReason: "void" } },
     { session }
   );
   return result.modifiedCount || 0;
@@ -211,6 +247,19 @@ export async function submitClaim(
   if (!warranty) throw new ApiError(404, "Warranty not found");
   if (warranty.userId.toString() !== userId) {
     throw new ApiError(403, "You can only claim your own warranty");
+  }
+  // Defensive: a record with no coverage should not exist any more, but one
+  // written before these rules could still be sitting there. Checked first,
+  // because "there was never any cover" is the real reason.
+  if (!hasWarrantyCoverage(warranty.warrantyType, warranty.warrantyPeriodMonths)) {
+    throw new ApiError(400, "This item was sold without warranty coverage");
+  }
+  await assertOrderStillCovered(warranty.orderId);
+  if (warranty.closedReason === "void") {
+    throw new ApiError(
+      400,
+      "This warranty was closed because the order was cancelled or returned"
+    );
   }
   // An active record takes the first claim. Once the admin asks for more
   // information the customer is allowed to answer, which keeps the claim open
@@ -304,6 +353,9 @@ export async function adminUpdateClaim(
       break;
     case "reject":
       warranty.status = "expired";
+      // Rejected is not the same as lapsed: the date may still be far away, so
+      // the reason is stored and an extension must not reopen it.
+      warranty.closedReason = "rejected";
       warranty.resolutionDetails = resolution || note || "Claim rejected";
       break;
     default:
@@ -350,6 +402,84 @@ export async function emailWarrantyCustomer(
   return { to: result.to };
 }
 
+/**
+ * Admin extends the coverage of one warranty.
+ *
+ * The months are added to whichever is later: the date already stored, or
+ * today. A lapsed warranty therefore gains real months instead of months that
+ * are already in the past.
+ */
+export async function extendWarranty(
+  warrantyId: string,
+  data: ExtendWarrantyInput,
+  actor?: { name?: string; email?: string }
+) {
+  const warranty = await Warranty.findById(warrantyId);
+  if (!warranty) throw new ApiError(404, "Warranty not found");
+
+  // The route validates the body, but the service is the last line of defence:
+  // a zero or negative count would quietly write a useless extension.
+  if (!Number.isInteger(data.months) || data.months < 1) {
+    throw new ApiError(400, "Add at least one month");
+  }
+  if (data.months > 60) {
+    throw new ApiError(400, "At most 60 months can be added at a time");
+  }
+
+  // Nothing was promised, so there is nothing to lengthen.
+  if (!hasWarrantyCoverage(warranty.warrantyType, warranty.warrantyPeriodMonths)) {
+    throw new ApiError(
+      400,
+      "This item was sold without warranty coverage, so there is nothing to extend"
+    );
+  }
+  await assertOrderStillCovered(warranty.orderId);
+  if (warranty.closedReason === "void") {
+    throw new ApiError(
+      400,
+      "This warranty was closed because the order was cancelled or returned"
+    );
+  }
+
+  const now = new Date();
+  const previousExpiryDate = warranty.expiryDate ? new Date(warranty.expiryDate) : now;
+  const base = previousExpiryDate > now ? previousExpiryDate : now;
+  const newExpiryDate = addMonthsClamped(base, data.months);
+
+  warranty.expiryDate = newExpiryDate;
+  warranty.extensions.push({
+    months: data.months,
+    previousExpiryDate,
+    newExpiryDate,
+    reason: data.reason,
+    extendedBy: actor?.name || actor?.email || "Admin",
+    createdAt: now,
+  });
+
+  // A warranty that only lapsed by date becomes usable again. A rejected claim
+  // stays closed: that decision was about the claim, not about the calendar.
+  if (
+    warranty.status === "expired" &&
+    warranty.closedReason === "date" &&
+    !warranty.claimReason
+  ) {
+    warranty.status = "active";
+    warranty.closedReason = undefined;
+  }
+
+  await warranty.save();
+
+  // Best effort, like every other warranty email.
+  await notifyWarrantyExtended(warranty, {
+    months: data.months,
+    previousExpiryDate,
+    newExpiryDate,
+    reason: data.reason,
+  });
+
+  return formatWarranty(warranty);
+}
+
 function formatWarranty(w: any) {
   return withEffectiveStatus({
     id: w._id.toString(),
@@ -359,9 +489,23 @@ function formatWarranty(w: any) {
     activationDate: w.activationDate,
     expiryDate: w.expiryDate,
     status: w.status,
+    // Why it is closed, when it is: date, rejected or void.
+    closedReason: w.closedReason,
     warrantyType: w.warrantyType,
+    warrantyTypeLabel: describeWarrantyType(w.warrantyType).label,
     warrantyPeriodMonths: w.warrantyPeriodMonths,
     warrantyTerms: w.warrantyTerms,
+    // Oldest first, so a screen can read them like a timeline.
+    extensions: Array.isArray(w.extensions)
+      ? w.extensions.map((entry: any) => ({
+          months: entry.months,
+          previousExpiryDate: entry.previousExpiryDate,
+          newExpiryDate: entry.newExpiryDate,
+          reason: entry.reason,
+          extendedBy: entry.extendedBy,
+          createdAt: entry.createdAt,
+        }))
+      : [],
     claimProblem: w.claimProblem,
     claimReason: w.claimReason,
     claimDescription: w.claimDescription,

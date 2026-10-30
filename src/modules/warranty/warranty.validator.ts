@@ -53,6 +53,25 @@ export const emailWarrantySchema = z.object({
   message: z.string().trim().min(1, "Message is required").max(3000, "Message is too long"),
 });
 
+/**
+ * An admin extends the coverage of one warranty.
+ *
+ * Months instead of a date on purpose: an extension always adds real time to
+ * whatever is left, so it can never produce a date that has already passed.
+ */
+export const extendWarrantySchema = z.object({
+  months: z.coerce
+    .number()
+    .int("Use whole months")
+    .min(1, "Add at least one month")
+    .max(60, "At most 60 months can be added at a time"),
+  reason: z
+    .string()
+    .trim()
+    .min(1, "Say why this warranty is being extended")
+    .max(500, "Keep the reason under 500 characters"),
+});
+
 export const getWarrantiesQuerySchema = z.object({
   userId: z.string().optional(),
   productId: z.string().optional(),
@@ -65,4 +84,5 @@ export const getWarrantiesQuerySchema = z.object({
 export type SubmitWarrantyClaimInput = z.infer<typeof submitWarrantyClaimSchema>;
 export type AdminUpdateClaimInput = z.infer<typeof adminUpdateClaimSchema>;
 export type EmailWarrantyInput = z.infer<typeof emailWarrantySchema>;
+export type ExtendWarrantyInput = z.infer<typeof extendWarrantySchema>;
 export type GetWarrantiesQuery = z.infer<typeof getWarrantiesQuerySchema>;

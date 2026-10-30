@@ -20,6 +20,24 @@ const warrantySchema = new Schema(
       enum: ["active", "expired", "claim_submitted", "under_review", "info_requested", "resolved"],
       default: "active",
     },
+
+    // Why an "expired" record is closed. Without this, expired hides three
+    // different stories: the date passed, the claim was rejected, or the order
+    // went back. Only "date" can be undone by extending the coverage.
+    closedReason: { type: String, enum: ["date", "rejected", "void"] },
+
+    // Every extension an admin granted, oldest first. Kept as history, so any
+    // extra months on a record can always be explained later.
+    extensions: [
+      {
+        months: { type: Number, required: true },
+        previousExpiryDate: { type: Date, required: true },
+        newExpiryDate: { type: Date, required: true },
+        reason: { type: String, required: true },
+        extendedBy: { type: String },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     // Claim information
     // What went wrong, picked from a fixed list (see warranty.validator.ts).
     claimProblem: { type: String },

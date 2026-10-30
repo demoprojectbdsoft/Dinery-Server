@@ -379,22 +379,25 @@ Tiers      silver < 1,000 · gold 1,000 · platinum 4,000 · diamond 10,000
 #### 1. Where coverage comes from
 
 - Coverage is **never created at checkout**. It is issued when an order reaches `delivered` — one record per order line.
-- A line is skipped when the product has `warrantyType: "none"` or `warrantyPeriodMonths: 0`, so a "no warranty" product never leaves an empty record behind.
+- A line is skipped unless the product promises coverage: the type must not be `none` **and** `warrantyPeriodMonths` must be at least 1. A "No warranty" product never leaves an empty record behind, and a leftover type with `0` months is ignored the same way.
 - `expiryDate` = delivery date + `warrantyPeriodMonths`, clamped to the last valid day of the month (31 Jan + 1 month → 28/29 Feb).
 - `warrantyType`, `warrantyPeriodMonths` and `warrantyTerms` are **copied onto the record**. The screens prefer the live product and fall back to the copy, so coverage survives a product edit or delete.
 - Creation is idempotent for one `(user, product, order)`: delivering the same order twice cannot issue a second record.
+- The product form cannot contradict itself. Saving `warrantyType: none` drops the period to `0`, and saving a covering type with `warrantyPeriodMonths: 0` stores the product as `none` — cover with no end date is not a promise anyone can honour.
 
 #### 2. The five warranty types
 
-The type is a label on the record plus free-text `warrantyTerms`. **The claim pipeline is identical for all of them** — a type only changes the wording a customer and an admin read.
+`src/modules/warranty/warranty.types.ts` is the single source of truth: the label, who carries the repair, and what the customer should expect. The product validator, the claim rules and the emails all read it.
 
-| `warrantyType` | Shown as | What it means here |
-|---|---|---|
-| `manufacturer-warranty` | Manufacturer warranty | Repairs or replacement are the brand's responsibility; the shop records the claim and passes it on |
-| `seller-warranty` | Seller warranty | The shop itself covers the repair or replacement |
-| `extended-warranty` | Extended warranty | Extra cover bought on top of the standard period |
-| `other` | Other warranty | Anything the shop describes in the terms text |
-| `none` | No warranty | No record is created at all, and the period is forced to `0` on the product |
+| `warrantyType` | Shown as | Covered by | Notes |
+|---|---|---|---|
+| `manufacturer-warranty` | Manufacturer warranty | The brand | The store records the claim and forwards it to the service centre |
+| `seller-warranty` | Seller warranty | The store | The store repairs or replaces directly |
+| `extended-warranty` | Extended warranty | The store, under the plan | Cover beyond the manufacturer's own period |
+| `other` | Other warranty | Per the terms text | **Requires `warrantyTerms`** — otherwise the API refuses it, because the type would say nothing |
+| `none` | No warranty | Nobody | No record is created, no claim form is offered, nothing can be extended |
+
+The claim pipeline is identical for the four covering types; the type changes who is responsible and the wording the customer and admin read. An unknown code on an old record is displayed as "Other warranty" instead of an empty cell.
 
 #### 3. Status lifecycle
 
@@ -406,10 +409,28 @@ The type is a label on the record plus free-text `warrantyTerms`. **The claim pi
 | `info_requested` | customer | sends a reply | `claim_submitted` |
 | any open claim | admin | `resolve` — resolution or note required | `resolved` |
 | any open claim | admin | `reject` — resolution or note required | `expired` |
-| `active` | system | expiry date has passed | `expired` |
-| any open claim | system | the order is cancelled or returned | `expired` |
+| `active` | system | expiry date has passed | `expired` (`closedReason: date`) |
+| any open claim | system | the order is cancelled or returned | `expired` (`closedReason: void`) |
 
 `active` means "no claim yet". `resolved` and `expired` are closed for good: no action can move them again, and the API refuses the attempt with a message that says why.
+
+An `expired` record also stores **why** it closed, because the same status covers three different stories:
+
+| `closedReason` | Meaning | Can be extended? |
+|---|---|---|
+| `date` | the coverage ran out | Yes — extending makes it `active` again |
+| `rejected` | an admin rejected the claim | No revival: the decision was about the claim, not the calendar |
+| `void` | the order was cancelled or returned | Never |
+
+#### 3b. Extending coverage
+
+`PATCH /api/warranties/:id/extend` (admin) takes `{ months: 1–60, reason }` and adds real time:
+
+- The months are counted from **whichever is later** — the stored expiry date or today — so extending a lapsed warranty gives it months ahead instead of months already in the past.
+- The extension is appended to `extensions[]` with the previous date, the new date, the reason and the admin's email, so the extra months can always be explained.
+- A lapsed record (`closedReason: date`, no claim) becomes `active` again. A rejected or void record keeps its status.
+- Records with no coverage cannot be extended, and neither can records on a cancelled order.
+- The customer is emailed the old date, the new date and the reason (best effort, like every warranty email).
 
 #### 4. What the customer sees
 
@@ -423,8 +444,9 @@ The type is a label on the record plus free-text `warrantyTerms`. **The claim pi
 
 1. *Dashboard → Warranties* lists every record. Clicking a row opens one dialog with the coverage, the terms, the claim text, the photos and the customer's replies.
 2. The admin fills an **Internal Admin Note** and **Resolution Details**, then picks one of four actions: mark under review, ask for more info, resolve, or reject.
-3. The buttons lock while a request is in flight, and the API enforces the same rules a second time, so two decisions can never race each other.
-4. **Email Customer** opens a composer that is already filled in from the claim — name, product, order number, reason, description, latest reply and coverage — and sends it to the address stored on the record.
+3. **Extend** adds months to the coverage with a required reason, and the dialog lists every extension already granted.
+4. The buttons lock while a request is in flight, and the API enforces the same rules a second time, so two decisions can never race each other.
+5. **Email Customer** opens a composer that is already filled in from the claim — name, product, order number, reason, description, latest reply and coverage — and sends it to the address stored on the record.
 
 #### 6. Emails
 
@@ -455,6 +477,7 @@ and give Resend records named send, rsend and resend._domainkey.
 | Customer replies to `info_requested` | the store inbox — `supportEmail` in Site Settings | the customer |
 | Admin moves a claim | the customer | — |
 | Order delivered and coverage issued | the customer, one email per item | — |
+| Admin extends the warranty | the customer, with the old and new expiry date | — |
 | Admin uses **Email Customer** | the customer | — |
 
 Warranty emails are **best effort**: a missing key or a rejected send is logged and never fails the claim, the delivery or the admin action. The exception is `POST /warranties/email/:id` — the admin asked for that email, so a failure comes back as `502` instead of a silent success.
@@ -474,7 +497,7 @@ Warranty emails are **best effort**: a missing key or a rejected send is logged 
 - At most 5 images per claim; a reply that adds photos to a full set keeps the newest five.
 - `request_info` without a note, and `resolve` / `reject` without any resolution or note, are refused — the customer must never see an unexplained status.
 - An empty admin note never overwrites the previous one.
-- Cancelling or returning a delivered order moves every open record of that order to `expired`, so goods that went back cannot still be claimed.
+- Cancelling or returning a delivered order moves every open record of that order to `expired` (`closedReason: void`). Claiming and extending also re-check the order itself, so even a record closed for another reason (a rejected claim, say) cannot be revived after the goods went back.
 
 ### Reviews & ratings
 

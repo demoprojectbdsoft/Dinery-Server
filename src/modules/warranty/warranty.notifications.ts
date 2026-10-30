@@ -7,8 +7,10 @@ import {
   claimSubmittedEmail,
   claimUpdatedEmail,
   customMessageEmail,
+  warrantyExtendedEmail,
   warrantyIssuedEmail,
 } from "../../utils/emailTemplates";
+import { describeWarrantyType } from "./warranty.types";
 
 /**
  * Every email the warranty feature sends.
@@ -21,16 +23,8 @@ import {
  *   claim filed / replied -> the store inbox (supportEmail in Site Settings), reply-to the customer
  *   claim moved by admin  -> the customer
  *   warranty created      -> the customer, one email per covered item
+ *   warranty extended     -> the customer, with the old and new expiry date
  */
-
-/** Human wording for the warranty type codes stored on a product. */
-const TYPE_LABELS: Record<string, string> = {
-  "manufacturer-warranty": "Manufacturer warranty",
-  "seller-warranty": "Seller warranty",
-  "extended-warranty": "Extended warranty",
-  other: "Other warranty",
-  none: "No warranty",
-};
 
 /** Human wording for the statuses an admin can move a claim to. */
 const STATUS_LABELS: Record<string, string> = {
@@ -157,7 +151,7 @@ export async function notifyWarrantiesIssued(order: any, issued: IssuedWarranty[
         customerName: user.name,
         productTitle: item.productTitle ?? undefined,
         orderNumber: order.orderNumber,
-        typeLabel: item.warrantyType ? TYPE_LABELS[item.warrantyType] : undefined,
+        typeLabel: item.warrantyType ? describeWarrantyType(item.warrantyType).label : undefined,
         months: item.warrantyPeriodMonths ?? undefined,
         expiryDate: formatDate(item.expiryDate),
         terms: item.warrantyTerms ?? undefined,
@@ -167,6 +161,41 @@ export async function notifyWarrantiesIssued(order: any, issued: IssuedWarranty[
     }
   } catch (err) {
     console.error("[warranty] Warranty confirmation email failed:", (err as Error).message);
+  }
+}
+
+/** Tells the customer that extra months were added to their coverage. */
+export async function notifyWarrantyExtended(
+  warranty: any,
+  extension: {
+    months: number;
+    previousExpiryDate: Date;
+    newExpiryDate: Date;
+    reason: string;
+  }
+) {
+  try {
+    const context = await loadContext(warranty);
+    if (!context.customerEmail) {
+      console.warn("[warranty] Customer has no email, extension email skipped");
+      return;
+    }
+
+    const { subject, html } = warrantyExtendedEmail({
+      storeName: context.storeName,
+      customerName: context.customerName,
+      productTitle: context.productTitle,
+      orderNumber: context.orderNumber,
+      typeLabel: describeWarrantyType(warranty.warrantyType).label,
+      months: extension.months,
+      previousExpiryDate: formatDate(extension.previousExpiryDate),
+      newExpiryDate: formatDate(extension.newExpiryDate),
+      reason: extension.reason,
+    });
+
+    await sendMail({ to: context.customerEmail, subject, html });
+  } catch (err) {
+    console.error("[warranty] Extension email failed:", (err as Error).message);
   }
 }
 

@@ -24,5 +24,7 @@ router.get("/", requireAuth, requireRole("admin"), warrantyController.getAllWarr
 router.patch("/claim/:id", requireAuth, requireRole("admin"), warrantyController.adminUpdateClaim);
 // Admin: email the customer about this warranty
 router.post("/email/:id", requireAuth, requireRole("admin"), warrantyController.emailCustomer);
+// Admin: add months to this warranty (the reason is required and kept)
+router.patch("/:id/extend", requireAuth, requireRole("admin"), warrantyController.extendWarranty);
 
 export default router;
