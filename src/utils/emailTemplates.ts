@@ -197,9 +197,15 @@ export interface ContactMessageMailInput {
 export function contactMessageEmail(data: ContactMessageMailInput) {
   const department = data.department === "contact" ? "General & Business" : "Customer Support";
 
+  // A subject is one line, so a newline typed into a name can never split it.
+  const oneLine = (value: string) => value.replace(/\s+/g, " ").trim();
+  const visitorName = oneLine(data.name) || "a visitor";
+
   // The department goes in the subject so the inbox can filter on it, and the
   // visitor's own subject is kept when they wrote one.
-  const subject = `[${department}] ${data.subject || `New message from ${data.name}`}`;
+  const subject = `[${department}] ${
+    oneLine(data.subject) || `New message from ${visitorName}`
+  }`;
 
   const body = `
     <p style="margin:0 0 14px">A visitor sent this message from the ${esc(
