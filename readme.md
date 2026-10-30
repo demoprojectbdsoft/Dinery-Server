@@ -767,6 +767,19 @@ Schedules are UTC, so `18:00` is midnight and `18:30` is 00:30 in Asia/Dhaka. On
 
 ---
 
+## 🛵 Rider & Delivery System
+
+The `rider` role and the delivery domain are being added in seven phases, without a second authentication system.
+
+- **Roles** — `admin`, `customer`, `rider`, `vendor`. `PATCH /api/users/:id` accepts the new roles; `requireAuth` re-reads the role from the database after a JWT check so a promotion or demotion applies on the next request.
+- **No shopping** — `assertShopper` refuses cart, wishlist and review writes for admin, demo admin, rider and vendor accounts.
+- **Ownership** — every rider endpoint will scope the query to the caller's token, never a body-supplied rider id.
+- **Tracking transport** — the API stores only the latest rider position per delivery; the customer page polls it every 8 seconds (Vercel serverless friendly), and optional Ably keys publish the same message for instant updates.
+
+**Progress:** Phase 1 ✅ roles, RBAC and no-shopping rules. Delivery models, assignment, lifecycle, tracking and OTP follow in Phases 2–7.
+
+---
+
 ## 📈 Project Status
 
 | Area | State |
@@ -782,6 +795,7 @@ Schedules are UTC, so `18:00` is midnight and `18:30` is 00:30 in Asia/Dhaka. On
 | Reviews & rating recalculation | ✅ Complete |
 | Store settings, branding, About page copy & opening hours | ✅ Complete |
 | Demo admin sandbox with daily restore | ✅ Complete |
+| Rider role, immediate role refresh and no-shopping guards | 🚧 Phase 1 of 7 |
 | Account data export | ✅ Complete |
 | Rate limiting, CORS allow-list, database indexes | ⏳ Planned |
 | Automated tests | ⏳ Planned |

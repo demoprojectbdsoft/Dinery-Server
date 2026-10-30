@@ -1,6 +1,6 @@
 import { ApiError } from "./apiError";
 import { refIdString } from "./ids";
-import { isAdminRole } from "./roles";
+import { canShop, isAdminRole, roleLabel } from "./roles";
 
 /**
  * Authorization helpers for the endpoints that act on "my own" data.
@@ -16,6 +16,18 @@ type Requester = { id?: string; role?: string } | undefined;
 export function currentUserId(user: Requester): string {
   if (!user?.id) throw new ApiError(401, "Authentication required");
   return user.id;
+}
+
+/**
+ * Refuses cart, wishlist and checkout writes for accounts that do not shop.
+ * The storefront hides those buttons, but a request can always be replayed, so
+ * the rule is enforced here as well.
+ *
+ * `action` is the verb phrase, for example "add products to cart".
+ */
+export function assertShopper(user: Requester, action: string): void {
+  if (!user?.role || canShop(user.role)) return;
+  throw new ApiError(403, `${roleLabel(user.role)} cannot ${action}`);
 }
 
 /**

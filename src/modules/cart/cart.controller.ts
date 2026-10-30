@@ -1,7 +1,7 @@
 import { catchAsync } from "../../utils/catchAsync";
 import { apiResponse } from "../../utils/apiResponse";
 import { ApiError } from "../../utils/apiError";
-import { currentUserId } from "../../utils/authz";
+import { currentUserId, assertShopper } from "../../utils/authz";
 import * as cartService from "./cart.service";
 
 /**
@@ -15,12 +15,14 @@ export const getCart = catchAsync(async (req, res) => {
 });
 
 export const addToCart = catchAsync(async (req, res) => {
+  assertShopper(req.user, "add products to cart");
   const { productId, quantity } = req.body;
   const item = await cartService.addToCart(currentUserId(req.user), productId, quantity);
   apiResponse(res, 201, item, "Added to cart");
 });
 
 export const updateCartItem = catchAsync(async (req, res) => {
+  assertShopper(req.user, "use a shopping cart");
   const { quantity } = req.body;
   const item = await cartService.updateCartItem(
     currentUserId(req.user),

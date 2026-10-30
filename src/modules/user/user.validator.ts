@@ -3,7 +3,7 @@ import { z } from "zod";
 export const updateUserSchema = z.object({
   name: z.string().min(1).optional(),
   image: z.string().optional(),
-  role: z.enum(["admin", "customer"]).optional(),
+  role: z.enum(["admin", "customer", "rider", "vendor"]).optional(),
   plan: z.string().optional(),
   status: z.enum(["active", "suspended"]).optional(),
   member: z.enum(["silver", "gold", "platinum", "diamond"]).optional(),

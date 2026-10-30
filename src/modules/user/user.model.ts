@@ -14,6 +14,12 @@ const userSchema = new Schema(
     phone: { type: String },
     bio: { type: String },
     department: { type: String },
+    /** Rider-only details, filled in from the rider profile page. */
+    vehicleType: { type: String },
+    vehicleNumber: { type: String },
+    licenseNumber: { type: String },
+    /** Riders go offline to stop receiving new delivery requests. */
+    availability: { type: String, enum: ["online", "offline"], default: "online" },
   },
   { timestamps: true, collection: "user" }
 );

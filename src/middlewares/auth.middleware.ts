@@ -64,6 +64,36 @@ async function userFromSession(token: string): Promise<AuthUser | null> {
 }
 
 /**
+ * Re-reads the role from the database after a JWT check.
+ *
+ * A JWT carries the role it was minted with, so an account promoted to rider
+ * (or demoted) would keep its old authority until the token expires. The
+ * backend must apply the change on the next request, not fifteen minutes later.
+ * A missing account is treated as signed out.
+ */
+async function withCurrentRole(user: AuthUser): Promise<AuthUser | null> {
+  try {
+    const mongoose = (await import("mongoose")).default;
+    const db = mongoose.connection.db;
+    if (!db) return user;
+
+    const objectId = mongoose.Types.ObjectId.isValid(user.id)
+      ? new mongoose.Types.ObjectId(user.id)
+      : user.id;
+
+    const record: any = await db.collection("user").findOne({
+      $or: [{ _id: user.id }, { _id: objectId }],
+    } as any);
+
+    if (!record) return null;
+    return { ...user, role: record.role ?? user.role, email: record.email ?? user.email };
+  } catch {
+    // A database hiccup must not sign everybody out: the token was valid.
+    return user;
+  }
+}
+
+/**
  * Resolves the caller once, then lets the request continue. Demo admin
  * requests are flagged for the whole request so the undo plugin can snapshot
  * every write they make.
@@ -75,10 +105,18 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 
   let user: AuthUser | null = null;
+  let resolvedFromJwt = false;
   try {
     user = await userFromJwt(token);
+    resolvedFromJwt = true;
   } catch {
     user = await userFromSession(token);
+  }
+
+  // The session fallback already read the user row, so only the JWT path needs
+  // the extra query for a fresh role.
+  if (user && resolvedFromJwt) {
+    user = await withCurrentRole(user);
   }
 
   if (!user) {

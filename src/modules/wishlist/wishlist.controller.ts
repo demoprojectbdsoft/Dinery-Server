@@ -1,7 +1,7 @@
 import { catchAsync } from "../../utils/catchAsync";
 import { apiResponse } from "../../utils/apiResponse";
 import { ApiError } from "../../utils/apiError";
-import { currentUserId } from "../../utils/authz";
+import { currentUserId, assertShopper } from "../../utils/authz";
 import * as wishlistService from "./wishlist.service";
 
 /**
@@ -15,6 +15,7 @@ export const getWishlist = catchAsync(async (req, res) => {
 });
 
 export const addToWishlist = catchAsync(async (req, res) => {
+  assertShopper(req.user, "add products to wishlist");
   const item = await wishlistService.addToWishlist(currentUserId(req.user), req.body.productId);
   apiResponse(res, 201, item, "Added to wishlist");
 });
