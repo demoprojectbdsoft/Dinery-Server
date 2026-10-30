@@ -542,6 +542,8 @@ The newest copy of each pair is kept (a second submit is usually a corrected rat
 - **Delete guard** — the whole delete is cancelled if the category or any of its subcategories still has products.
 - **Cart rows** — one row per item behind a compound unique index on `{ userId, productId }`, with the subtotal computed live.
 - **Slider** — a slide references a real product; price, image and discount are read live. When a slide's countdown ends, the product's discount returns to 0 and its price to the original.
+- **Stock tracking is optional.** A product saved with **no `stockQuantity`** is not stock-tracked: nothing checks it, nothing limits how many can be bought, checkout does not decrement it and a cancellation does not add anything back. Only a saved number turns stock rules on, and `formatProduct` reports such a product as available whatever an old flag says. The order and cancellation updates filter on `stockQuantity: { $ne: null }`, because `$inc` on a missing field would write `NaN`.
+- **Brand for a manufacturer warranty.** When `warrantyType` is `manufacturer-warranty` (the default), the product must carry a `Brand` entry in `specifications` — the claim is filed with the brand, so the name is not optional. A supporting type — seller warranty, extended or other — does not need it.
 
 ### Store settings
 

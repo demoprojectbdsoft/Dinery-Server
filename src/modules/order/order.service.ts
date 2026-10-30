@@ -173,11 +173,23 @@ async function applyCancellation(
     const productId = orderItemProductId(item);
     if (!productId || !item.quantity) continue;
 
-    // Checkout took this stock out, and delivery counted it as a sale.
-    const changes: Record<string, number> = { stockQuantity: item.quantity };
-    if (wasDelivered) changes.sellCount = -item.quantity;
+    // Delivery counted this as a sale, so a return undoes the count even for a
+    // product that is not stock-tracked.
+    if (wasDelivered) {
+      await Product.findByIdAndUpdate(
+        productId,
+        { $inc: { sellCount: -item.quantity } },
+        { session }
+      );
+    }
 
-    await Product.findByIdAndUpdate(productId, { $inc: changes }, { session });
+    // Only a tracked product has a number to give back. The guard keeps `$inc`
+    // away from a missing field, which it would otherwise turn into NaN.
+    await Product.updateOne(
+      { _id: productId, stockQuantity: { $ne: null } },
+      { $inc: { stockQuantity: item.quantity } },
+      { session }
+    );
   }
 
   // Points spent at checkout are always returned, delivered or not.
@@ -343,8 +355,11 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
     await logOrderStatus(orderId, "confirmed", { session });
 
     for (const item of data.items) {
-      await Product.findByIdAndUpdate(
-        item.productId,
+      // A product saved with no stock quantity is not stock-tracked, so it has
+      // no number to lower. The filter skips those rows; without it `$inc`
+      // would write NaN into the field.
+      await Product.updateOne(
+        { _id: item.productId, stockQuantity: { $ne: null } },
         { $inc: { stockQuantity: -item.quantity } },
         { session }
       );

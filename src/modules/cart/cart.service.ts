@@ -43,9 +43,15 @@ async function findProductOrThrow(productId: string) {
   return product;
 }
 
-/** Rejects products that are flagged out of stock or have no units left. */
+/**
+ * Rejects products that are flagged out of stock or have no units left.
+ *
+ * A product with no stock quantity was saved without stock tracking, so it has
+ * no count to check and is always sellable.
+ */
 function assertInStock(product: any) {
-  if (!product.inStock || (product.stockQuantity != null && product.stockQuantity <= 0)) {
+  if (product.stockQuantity == null) return;
+  if (!product.inStock || product.stockQuantity <= 0) {
     throw new ApiError(400, `"${product.title}" is currently out of stock`);
   }
 }

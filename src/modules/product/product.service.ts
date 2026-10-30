@@ -87,6 +87,10 @@ function formatProduct(product: any, ratingsMap?: Map<string, any>) {
     id,
     badges: Array.isArray(obj.badges) ? obj.badges : [],
     specifications,
+    // A product saved with no stock quantity is not stock-tracked: nothing can
+    // run it dry, so it is always offered. The stored flag is ignored, so a
+    // leftover "out of stock" can never hide it again.
+    inStock: obj.stockQuantity == null ? true : Boolean(obj.inStock),
     price: effectivePrice,
     originalPrice: effectiveOriginalPrice,
     categories: categoryName ? [categoryName] : [],
@@ -135,6 +139,31 @@ function warrantyFieldsFor(
   };
 }
 
+/** Reads one specification by name, whatever the admin capitalised it as. */
+function specificationValue(specifications: any, name: string): string {
+  const source =
+    specifications instanceof Map ? Object.fromEntries(specifications) : specifications;
+  if (!source || typeof source !== "object") return "";
+
+  const key = Object.keys(source).find(
+    (candidate) => candidate.trim().toLowerCase() === name.toLowerCase()
+  );
+  return key ? String(source[key] ?? "").trim() : "";
+}
+
+/**
+ * A manufacturer warranty is honoured by the brand's own service centres, so
+ * the brand has to be named in the specs for a claim to be actionable.
+ */
+function assertBrandForManufacturerWarranty(type: string, specifications: any) {
+  if (type !== "manufacturer-warranty") return;
+  if (specificationValue(specifications, "brand")) return;
+  throw new ApiError(
+    400,
+    "Add the brand to the specifications — a manufacturer warranty is claimed from the brand"
+  );
+}
+
 export async function createProduct(data: CreateProductInput) {
   const category = await Category.findById(data.categoryId);
   if (!category) throw new ApiError(404, "Category not found");
@@ -153,6 +182,8 @@ export async function createProduct(data: CreateProductInput) {
   const warranty = warrantyFieldsFor(data, data.warrantyPeriodMonths, data.warrantyType);
   data.warrantyType = warranty.warrantyType;
   data.warrantyPeriodMonths = warranty.warrantyPeriodMonths;
+
+  assertBrandForManufacturerWarranty(data.warrantyType, data.specifications);
 
   const product = await Product.create(data);
   return formatProduct(product);
@@ -266,7 +297,13 @@ async function buildFilterConditions(query: GetProductsQuery) {
   if (activeBadge?.trim()) conditions.push(buildBadgeCondition(activeBadge));
 
   if (isFeatured !== undefined) conditions.push({ isFeatured });
-  if (inStock !== undefined) conditions.push({ inStock });
+  if (inStock === true) {
+    // An untracked product (no stock quantity) is always available, even if an
+    // old record still carries a false flag.
+    conditions.push({ $or: [{ inStock: true }, { stockQuantity: null }] });
+  } else if (inStock === false) {
+    conditions.push({ inStock: false, stockQuantity: { $ne: null } });
+  }
   if (query.minRating !== undefined) conditions.push({ rating: { $gte: query.minRating } });
   if (query.hasOffer) conditions.push(buildOfferCondition());
 
@@ -330,6 +367,12 @@ export async function updateProduct(id: string, data: UpdateProductInput) {
   );
   data.warrantyType = warranty.warrantyType;
   data.warrantyPeriodMonths = warranty.warrantyPeriodMonths;
+
+  // The stored specs are checked when the update did not send new ones.
+  assertBrandForManufacturerWarranty(
+    warranty.warrantyType,
+    data.specifications ?? current.specifications
+  );
 
   const product = await Product.findByIdAndUpdate(id, data, { new: true });
   if (!product) throw new ApiError(404, "Product not found");

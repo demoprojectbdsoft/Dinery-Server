@@ -18,6 +18,8 @@ const productSchema = new Schema(
     additionalImages: [{ type: String }],               // gallery
 
     inStock: { type: Boolean, default: true },
+    // Left empty when the product is not stock-tracked: no count, no limit and
+    // no decrement is applied to it anywhere in the app.
     stockQuantity: { type: Number },
     sellCount: { type: Number, default: 0 },
 
