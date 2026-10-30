@@ -45,6 +45,18 @@ const topBarItemSchema = new Schema(
   { _id: false }
 );
 
+// ── Brand Marquee Logo ───────────────────────────────────────────────────────
+// The logos that scroll across the homepage. Each brand is one row, so the
+// owner can add any number of them, with or without a link.
+const brandLogoSchema = new Schema(
+  {
+    name: { type: String, default: "" },  // written as text when no logo is set
+    logo: { type: String, default: "" },  // image URL
+    href: { type: String, default: "" },  // blank means the logo is not a link
+  },
+  { _id: false }
+);
+
 // ── Shipping & Delivery Config ────────────────────────────────────────────────
 const shippingConfigSchema = new Schema(
   {
@@ -149,6 +161,9 @@ const siteSettingsSchema = new Schema(
 
     // ── Social Media
     socialLinks: { type: [socialLinkSchema], default: [] },
+
+    // ── Homepage Brand Marquee
+    brandLogos: { type: [brandLogoSchema], default: [] },
 
     // ── Misc
     currency: { type: String, default: "USD" },

@@ -553,9 +553,11 @@ The newest copy of each pair is kept (a second submit is usually a corrected rat
 
 ### Store settings
 
-One document drives the whole storefront: branding, fonts, palettes, logos, contact details, **opening hours** (multi-line, one day per line), the **About page copy** (`about.headline`, `intro`, `headquartersNote`, `openingHoursNote`, `ctaTitle`, `ctaDescription`), shipping fees, free-shipping threshold, currency, default browse mode and the `maintenanceMode` flag. It is readable without a token so the storefront can render, and only an admin can change it. Empty About fields fall back to the store's built-in wording on the frontend. The document's own defaults are written for any kind of catalog — *Sparq - Premium Online Store*, *We Provide High Quality Products* — so a fresh store is never described as an electronics shop before the admin edits the text.
+One document drives the whole storefront: branding, fonts, palettes, logos, contact details, **opening hours** (multi-line, one day per line), the **About page copy** (`about.headline`, `intro`, `headquartersNote`, `openingHoursNote`, `ctaTitle`, `ctaDescription`), the **homepage brand marquee** (`brandLogos` — one row per partner logo with a `name`, a `logo` URL and an optional `href`; the whole band hides when the list is empty), shipping fees, free-shipping threshold, currency, default browse mode and the `maintenanceMode` flag. It is readable without a token so the storefront can render, and only an admin can change it. Empty About fields fall back to the store's built-in wording on the frontend. The document's own defaults are written for any kind of catalog — *Sparq - Premium Online Store*, *We Provide High Quality Products* — so a fresh store is never described as an electronics shop before the admin edits the text.
 
 Homepage promo banners are deliberately **not** part of this document: each banner is its own row in the `promos` collection, so they can be named, ordered, switched on one by one and kept in any number. See the business rules below.
+
+The brand marquee is the opposite case and stays **inside** this document as `brandLogos`: a logo has no state of its own — no order, no on/off switch — so replacing the whole list when the admin presses Publish is exactly what the owner expects.
 
 ---
 
