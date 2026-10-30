@@ -9,6 +9,7 @@ import {
 import { RiderLocation } from "./delivery.location.model";
 import { User } from "../user/user.model";
 import { Order } from "../order/order.model";
+import { SiteSettings } from "../site-settings/site-settings.model";
 import { ApiError } from "../../utils/apiError";
 import { updateOrderStatus } from "../order/order.service";
 import { recordActivity, notifyUser } from "../activity/activity.service";
@@ -334,6 +335,85 @@ export async function getRiderDeliveries(riderId: string, query: GetRiderDeliver
 /** One job, for the rider's own detail view. */
 export async function getRiderDelivery(riderId: string, id: string) {
   return toDto(await requireRiderDelivery(riderId, id));
+}
+
+/**
+ * Everything the invoice PDF prints, for one delivery the caller is carrying.
+ *
+ * It is read from the order rather than copied onto the delivery months
+ * earlier, so the figures always match what the customer was charged. The
+ * rider's own row is the ownership check: an id that is not theirs is simply
+ * "not found", which tells a stranger nothing.
+ */
+export async function getRiderInvoice(riderId: string, deliveryId: string) {
+  if (!Types.ObjectId.isValid(deliveryId)) throw new ApiError(404, "Delivery not found");
+
+  const delivery = await Delivery.findOne({
+    _id: new Types.ObjectId(deliveryId),
+    riderId: new Types.ObjectId(riderId),
+  })
+    .populate("riderId", "name phone image vehicleType vehicleNumber")
+    .lean();
+
+  if (!delivery) throw new ApiError(404, "Delivery not found");
+
+  const order = await Order.findById(delivery.orderId)
+    .select(
+      "items subtotal shippingFee totalAmount shippingMethod shippingAddress paymentMethod orderStatus pointsDiscount pointsRedeemed createdAt"
+    )
+    .lean();
+
+  if (!order) throw new ApiError(404, "This delivery has no order behind it");
+
+  const settings = await SiteSettings.findOne().select("siteName address supportEmail supportPhone currency").lean();
+  const items = (order.items || []).map((item: any) => ({
+    title: item.title || "Item",
+    quantity: Number(item.quantity || 0),
+    price: Number(item.price || 0),
+  }));
+
+  return {
+    invoiceNumber: `INV-${String(delivery._id).slice(-8).toUpperCase()}`,
+    issuedAt: new Date().toISOString(),
+    order: {
+      _id: String(order._id),
+      orderNumber: shortOrderNumber(order._id),
+      placedAt: new Date(order.createdAt).toISOString(),
+      status: order.orderStatus,
+      paymentMethod: order.paymentMethod,
+      shippingMethod: order.shippingMethod || "standard",
+    },
+    store: {
+      name: settings?.siteName || "Sparq",
+      address: settings?.address || "",
+      email: settings?.supportEmail || "",
+      phone: settings?.supportPhone || "",
+      currency: settings?.currency || "USD",
+    },
+    customer: {
+      name: order.shippingAddress?.fullName || delivery.customerName || "Customer",
+      phone: order.shippingAddress?.phone || delivery.customerPhone || "",
+      address: [order.shippingAddress?.address, order.shippingAddress?.city]
+        .filter(Boolean)
+        .join(", "),
+      postalCode: order.shippingAddress?.postalCode || "",
+    },
+    rider: riderOf({ riderId: delivery.riderId }),
+    delivery: {
+      status: delivery.status as DeliveryStatus,
+      fee: Number(delivery.fee || 0),
+      distanceKm: delivery.distanceKm ?? null,
+      assignedAt: new Date(delivery.createdAt).toISOString(),
+    },
+    items,
+    totals: {
+      subtotal: Number(order.subtotal || 0),
+      shipping: Number(order.shippingFee || 0),
+      discount: Number(order.pointsDiscount || 0),
+      pointsRedeemed: Number(order.pointsRedeemed || 0),
+      total: Number(order.totalAmount || 0),
+    },
+  };
 }
 
 // ─── Store: choosing a rider ──────────────────────────────────────────────────

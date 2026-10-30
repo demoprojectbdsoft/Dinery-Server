@@ -43,6 +43,15 @@ export const getMyDelivery = catchAsync(async (req, res) => {
   apiResponse(res, 200, delivery, "Delivery fetched successfully");
 });
 
+/** The figures the rider's invoice PDF prints, for their own job only. */
+export const getDeliveryInvoice = catchAsync(async (req, res) => {
+  const invoice = await deliveryService.getRiderInvoice(
+    currentUserId(req.user),
+    String(req.params.id)
+  );
+  apiResponse(res, 200, invoice, "Invoice fetched successfully");
+});
+
 export const acceptDelivery = catchAsync(async (req, res) => {
   const delivery = await deliveryService.acceptDelivery(
     currentUserId(req.user),

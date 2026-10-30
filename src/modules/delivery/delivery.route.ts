@@ -102,6 +102,7 @@ router.use(requireAuth, requireRole("rider"));
 router.get("/", deliveryController.getMyDeliveries);
 router.get("/stats", deliveryController.getMyStats);
 router.get("/:id", deliveryController.getMyDelivery);
+router.get("/:id/invoice", deliveryController.getDeliveryInvoice);
 router.post("/:id/accept", deliveryController.acceptDelivery);
 router.post(
   "/:id/decline",
