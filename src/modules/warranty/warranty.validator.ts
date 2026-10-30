@@ -28,8 +28,10 @@ export const submitWarrantyClaimSchema = z.object({
   // Kept optional: the claim form no longer asks for it, but older clients and
   // existing records still carry a code from CLAIM_PROBLEM_VALUES.
   problem: z.enum(CLAIM_PROBLEM_VALUES, { message: "Choose what went wrong with the product" }).optional(),
-  reason: z.string().min(1, "Reason is required").max(200),
-  description: z.string().min(1, "Description is required").max(2000),
+  // Trimmed first, so a reason made only of spaces is rejected instead of
+  // being stored as an empty string.
+  reason: z.string().trim().min(1, "Reason is required").max(200),
+  description: z.string().trim().min(1, "Description is required").max(2000),
   images: z.array(z.string().url()).max(5, "Maximum 5 images per claim").optional().default([]),
 });
 

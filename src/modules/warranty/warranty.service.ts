@@ -237,7 +237,9 @@ export async function submitClaim(
       createdAt: new Date(),
     });
     const mergedImages = [...(warranty.claimImages || []), ...(data.images || [])];
-    warranty.claimImages = mergedImages.slice(0, 5);
+    // Keep the newest five. A reply that adds photos after a full set must not
+    // lose the pictures it just sent.
+    warranty.claimImages = mergedImages.slice(-5);
   } else {
     warranty.claimDescription = data.description;
     warranty.claimImages = data.images || [];
