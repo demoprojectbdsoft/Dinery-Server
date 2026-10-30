@@ -33,6 +33,16 @@ export const FINISHED_DELIVERY_STATUSES: DeliveryStatus[] = [
   "declined",
 ];
 
+/**
+ * Every stage where the order still has somebody attached to it. "assigned"
+ * belongs here even though no work has started: the offer is what lets the
+ * store ship, so it counts as a live assignment for the one-job-per-order rule.
+ */
+export const LIVE_DELIVERY_STATUSES: DeliveryStatus[] = [
+  "assigned",
+  ...ACTIVE_DELIVERY_STATUSES,
+];
+
 /** One step in the delivery's own timeline, kept beside the order timeline. */
 const deliveryEventSchema = new Schema(
   {

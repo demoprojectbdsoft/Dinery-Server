@@ -1,0 +1,164 @@
+import { Types } from "mongoose";
+import { Delivery, ACTIVE_DELIVERY_STATUSES, DeliveryStatus } from "./delivery.model";
+import { RiderLocation, TRAIL_LIMIT } from "./delivery.location.model";
+import { Order } from "../order/order.model";
+import { ApiError } from "../../utils/apiError";
+import { assertOwnerOrAdmin } from "../../utils/authz";
+import { getCustomerOtp } from "./delivery.otp";
+import { etaFrom, latestLocation, shortOrderNumber, toDto } from "./delivery.service";
+import { LocationInput } from "./delivery.validator";
+
+type Requester = { id?: string; role?: string } | undefined;
+
+/** Metres between two coordinates (haversine). */
+function metresBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const R = 6_371_000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/** How much of the recorded route the rider has already covered, 0–1. */
+function trailProgress(trail: { lat: number; lng: number }[], distanceKm: number | null) {
+  if (!distanceKm || distanceKm <= 0 || trail.length < 2) return 0;
+  let metres = 0;
+  for (let i = 1; i < trail.length; i++) metres += metresBetween(trail[i - 1], trail[i]);
+  return Math.min(1, metres / (distanceKm * 1000));
+}
+
+/**
+ * Records one position ping.
+ *
+ * Only the rider carrying an accepted job may report, and only while the job is
+ * live: a finished delivery stops collecting location data the moment it ends.
+ */
+export async function saveLocation(riderId: string, deliveryId: string, input: LocationInput) {
+  if (!Types.ObjectId.isValid(deliveryId)) throw new ApiError(404, "Delivery not found");
+
+  const delivery = await Delivery.findOne({
+    _id: new Types.ObjectId(deliveryId),
+    riderId: new Types.ObjectId(riderId),
+  })
+    .select("status")
+    .lean();
+
+  if (!delivery) throw new ApiError(404, "Delivery not found");
+  if (!ACTIVE_DELIVERY_STATUSES.includes(delivery.status as DeliveryStatus)) {
+    throw new ApiError(400, "Location is shared only while the delivery is active");
+  }
+
+  const point = {
+    lat: input.lat,
+    lng: input.lng,
+    at: new Date(),
+  };
+
+  const saved = await RiderLocation.findOneAndUpdate(
+    { deliveryId: new Types.ObjectId(deliveryId) },
+    {
+      $set: {
+        riderId: new Types.ObjectId(riderId),
+        lat: input.lat,
+        lng: input.lng,
+        accuracy: input.accuracy ?? null,
+        heading: input.heading ?? null,
+        speed: input.speed ?? null,
+      },
+      $push: { trail: { $each: [point], $slice: -TRAIL_LIMIT } },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  ).lean();
+
+  return {
+    saved: true,
+    updatedAt: new Date(saved!.updatedAt).toISOString(),
+  };
+}
+
+/**
+ * The tracking page's one read.
+ *
+ * Everything the customer's screen needs arrives in a single call, so the 8
+ * second refresh is one request: the stage, the rider, the newest position, the
+ * short trail, an ETA, and the code they will read at the door.
+ */
+export async function getTracking(orderId: string, requester: Requester) {
+  if (!Types.ObjectId.isValid(orderId)) throw new ApiError(404, "Order not found");
+
+  const order = await Order.findById(orderId)
+    .select("userId orderStatus shippingAddress estimatedDelivery shippingMethod totalAmount")
+    .lean();
+  if (!order) throw new ApiError(404, "Order not found");
+
+  assertOwnerOrAdmin(order.userId, requester, "You are not allowed to track this order");
+
+  // The newest row wins: a reassigned order keeps the earlier attempts for the
+  // history but only the current one is on the road.
+  const delivery = await Delivery.findOne({ orderId: new Types.ObjectId(orderId) })
+    .populate("riderId", "name phone vehicleType vehicleNumber")
+    .sort({ createdAt: -1 });
+
+  if (!delivery) {
+    return {
+      order: {
+        _id: String(order._id),
+        orderNumber: shortOrderNumber(order._id),
+        status: order.orderStatus,
+        estimatedDelivery: order.estimatedDelivery || "",
+        shippingMethod: order.shippingMethod || "standard",
+        address: order.shippingAddress?.address || "",
+        city: order.shippingAddress?.city || "",
+      },
+      delivery: null,
+      location: null,
+      eta: null,
+      otp: null,
+      isOwner: true,
+      serverTime: new Date().toISOString(),
+    };
+  }
+
+  const location = await latestLocation(String(delivery._id));
+  const progress = trailProgress(location?.trail || [], delivery.distanceKm ?? null);
+
+  // The code is only useful while the parcel is on its way. Once the job is
+  // closed there is nothing left to read at the door.
+  const isLive = !["delivered", "cancelled", "declined"].includes(delivery.status as string);
+  const otp = isLive ? await getCustomerOtp(String(delivery._id)) : null;
+
+  return {
+    order: {
+      _id: String(order._id),
+      orderNumber: shortOrderNumber(order._id),
+      status: order.orderStatus,
+      estimatedDelivery: order.estimatedDelivery || "",
+      shippingMethod: order.shippingMethod || "standard",
+      address: order.shippingAddress?.address || "",
+      city: order.shippingAddress?.city || "",
+    },
+    delivery: toDto(delivery),
+    location,
+    eta: etaFrom(delivery.distanceKm ?? null, location?.speed ?? null, progress),
+    otp: otp ? { ...otp, progress } : null,
+    isOwner: true,
+    serverTime: new Date().toISOString(),
+  };
+}
+
+/**
+ * Checks that the caller may see this order's code.
+ *
+ * The code is the only secret in the flow, so it is handed out on its own call
+ * and only to the buyer (or the store team), never inside a delivery row.
+ */
+export async function assertCanReadCode(orderId: string, requester: Requester) {
+  if (!Types.ObjectId.isValid(orderId)) throw new ApiError(404, "Order not found");
+  const order = await Order.findById(orderId).select("userId").lean();
+  if (!order) throw new ApiError(404, "Order not found");
+  assertOwnerOrAdmin(order.userId, requester, "You are not allowed to see this code");
+  return order;
+}

@@ -22,6 +22,7 @@ import {
   notifyOrderPlaced,
   notifyOrderStatusChanged,
 } from "../activity/activity.notifications";
+import { Delivery, LIVE_DELIVERY_STATUSES } from "../delivery/delivery.model";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -496,10 +497,35 @@ export async function getOrderById(id: string) {
 
   const transaction = await getLatestTransactionForOrder(id);
 
+  // The live job beside the sale: who is carrying it and how far it got. The
+  // order itself never stores that, so a reassignment cannot rewrite history.
+  const delivery = await Delivery.findOne({
+    orderId: id,
+    status: { $in: LIVE_DELIVERY_STATUSES },
+  })
+    .populate("riderId", "name phone vehicleType vehicleNumber")
+    .lean();
+
   return {
     ...order.toObject(),
     transactionId: transaction?.reference,
     paymentStatus: transaction?.status,
+    delivery: delivery
+      ? {
+          _id: String(delivery._id),
+          status: delivery.status,
+          fee: delivery.fee ?? 0,
+          expiresAt: delivery.expiresAt ?? null,
+          rider: delivery.riderId
+            ? {
+                name: (delivery.riderId as any)?.name || "",
+                phone: (delivery.riderId as any)?.phone || "",
+                vehicleType: (delivery.riderId as any)?.vehicleType || "",
+                vehicleNumber: (delivery.riderId as any)?.vehicleNumber || "",
+              }
+            : null,
+        }
+      : null,
   };
 }
 
@@ -508,7 +534,12 @@ export async function getOrderById(id: string) {
 export async function updateOrderStatus(
   id: string,
   data: UpdateOrderStatusInput,
-  changedBy?: string
+  changedBy?: string,
+  /**
+   * A rider closing a delivery is itself the confirmation that the parcel
+   * arrived, so the customer-response gate does not apply to that one caller.
+   */
+  options: { byRider?: boolean } = {}
 ) {
   // Warranty confirmations are collected inside the transaction but only sent
   // after it commits, so a rolled-back delivery never announces coverage that
@@ -544,9 +575,29 @@ export async function updateOrderStatus(
       );
     }
 
+    // A parcel only leaves the store with somebody carrying it: the rider has
+    // to be offered the job first, and the offer has to still be alive.
+    if (data.orderStatus === "shipped") {
+      const riderReady = await Delivery.findOne({
+        orderId: id,
+        status: { $in: LIVE_DELIVERY_STATUSES },
+        $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+      })
+        .select("_id")
+        .session(session ?? null);
+
+      if (!riderReady) {
+        throw new ApiError(
+          400,
+          "Assign a rider before marking this order shipped. Open the order and choose Ship with a rider."
+        );
+      }
+    }
+
     // Once an order has shipped, the customer has to tell us what happened
-    // before we can close it either way.
-    if (order.orderStatus === "shipped" && !order.customerResponse) {
+    // before we can close it either way. A rider closing the job is the one
+    // exception: they were standing at the door when it happened.
+    if (order.orderStatus === "shipped" && !order.customerResponse && !options.byRider) {
       throw new ApiError(
         400,
         "Customer must respond before a shipped order can be delivered or cancelled"
@@ -588,6 +639,25 @@ export async function updateOrderStatus(
     // status, which is why the original document is kept around.
     if (data.orderStatus === "cancelled") {
       await applyCancellation(order, id, order.orderStatus, session);
+
+      // The rider is standing down: the job they were offered no longer has a
+      // parcel. A cancelled row keeps the history without blocking a future
+      // assignment, because the one-live-job index ignores finished rows.
+      await Delivery.updateMany(
+        { orderId: id, status: { $in: LIVE_DELIVERY_STATUSES } },
+        {
+          $set: { status: "cancelled", cancelledAt: new Date() },
+          $push: {
+            history: {
+              status: "cancelled",
+              at: new Date(),
+              note: "Order cancelled by the store",
+              by: changedBy ?? null,
+            },
+          },
+        },
+        { session }
+      );
     }
 
     if (data.orderStatus === "delivered") {

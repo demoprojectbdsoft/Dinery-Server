@@ -16,6 +16,8 @@ export const STORE_ACTIVITY_TYPES = [
   "warranty",
   "message",
   "review",
+  // A delivery was offered, accepted, declined or stopped.
+  "delivery",
 ] as const;
 
 /**

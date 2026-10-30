@@ -5,6 +5,7 @@ import { ENV } from "./config/env";
 import cron from "node-cron";
 import { restoreDemoChanges } from "./modules/demo/demo.service";
 import { expireStaleWarranties } from "./modules/warranty/warranty.service";
+import { expireStaleDeliveries } from "./modules/delivery/delivery.service";
 
 async function startServer() {
   await connectDB();
@@ -36,6 +37,24 @@ async function startServer() {
         console.log("[CRON] ⏳ Stale warranties expired:", expired);
       } catch (err) {
         console.error("[CRON] ❌ Failed to expire warranties:", err);
+      }
+    },
+    { timezone }
+  );
+
+  // Delivery requests that nobody answered: every ten minutes, because a rider
+  // has a thirty-minute window. The accept endpoint refuses an expired offer on
+  // its own, so this only keeps the board honest.
+  cron.schedule(
+    "*/10 * * * *",
+    async () => {
+      try {
+        const result = await expireStaleDeliveries();
+        if (result.expired > 0) {
+          console.log("[CRON] ⏳ Expired delivery requests:", result.expired);
+        }
+      } catch (err) {
+        console.error("[CRON] ❌ Failed to expire deliveries:", err);
       }
     },
     { timezone }
