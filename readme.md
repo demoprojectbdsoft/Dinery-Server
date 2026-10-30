@@ -110,7 +110,7 @@ src/
     ├── transactions.ts        withTransaction() with standalone fallback
     ├── ids.ts                 ObjectId helpers
     ├── emailTemplates.ts      every email body, drawn with the brand from Site Settings
-    ├── mailer.ts              Resend over HTTPS, or your own SMTP mailbox; never throws
+    ├── mailer.ts              every email over SMTP, from your own mailbox; never throws
     └── roles.ts               role normalisation
 ```
 
@@ -475,24 +475,18 @@ The **look** is read from the same place, so a rebrand needs no redeploy. `getMa
 
 When Site Settings cannot be read, `DEFAULT_BRAND` takes over, so an email is styled even with an empty settings record. The body stays inside what mail clients really render: nested divs, inline styles and solid colours — no flexbox, no stylesheets, no background images, and buttons are link blocks because a real `<button>` does nothing in a mailbox.
 
-There are three transports, and whichever credential exists wins in this order: Brevo, then SMTP, then Resend.
+Every message leaves over **SMTP**, logging in as the mailbox in `SMTP_USER` (Nodemailer). The message goes out as that real address, so it reaches any customer and needs no domain to verify — only an app password from that same mailbox:
 
-| When | Transport | Why |
-|---|---|---|
-| `BREVO_API_KEY` is set | Brevo's HTTPS API | Only a **sender address** has to be confirmed, never a domain, and Brevo keeps a delivery log per message. Free plan: 300/day |
-| otherwise `SMTP_USER` + `SMTP_PASS` | SMTP through your own mailbox (Nodemailer) | Mail leaves as a real address, so it reaches customers with no domain to verify. Keep the timeouts short: a serverless host may cut the handshake off |
-| otherwise `RESEND_API_KEY` | Resend's HTTPS API | The safe serverless path, but Resend only sends from a verified domain — or from `onboarding@resend.dev`, which reaches nobody except the account owner |
+| Step | Value |
+|---|---|
+| `SMTP_HOST` | `smtp.gmail.com` |
+| `SMTP_PORT` | `587` (STARTTLS) or `465` (TLS from the first byte) |
+| `SMTP_USER` / `SMTP_PASS` | the mailbox, and its 16-character **app password** |
+| `MAIL_FROM` | the same mailbox with a name: `Sparq <you@gmail.com>` |
+
+`MAIL_FROM` is sent exactly as written, so the display name survives. The address inside `<>` must contain an `@`: a bare domain such as `Sparq <yourshop.org>` reads like a sender but holds no mailbox, so the mailer refuses it before anything leaves and says so in the log, instead of passing on a vague "invalid sender". The connection steps keep an 8 second budget, because a serverless host may cut the handshake off.
 
 Contact messages are the one exception to the "send after the write" rule: `POST /contact` stores the message **before** it tries to send, so a mail failure can never lose it. The record keeps the reason (`status: failed`, `error: ...`), and the visitor is told the message was received.
-
-```
-Sending domain check
---------------------
-sparq.bdsoft.org is a CNAME to Vercel, and DNS allows no record
-under a CNAME, so send.sparq / rsend.sparq / resend._domainkey.sparq
-can never be created. Verify the bare domain (bdsoft.org) instead,
-and give Resend records named send, rsend and resend._domainkey.
-```
 
 | Trigger | Recipient | Reply-to |
 |---|---|---|
@@ -677,13 +671,11 @@ To check end to end: sign in as the demo admin, add a category and edit a produc
 | `CRON_SECRET` | For cron | Long random string guarding `/api/demo/restore`. Generate with `openssl rand -hex 24`. |
 | `DEMO_ADMIN_EMAIL` | No | Email of the shared demo admin. Default `admin@gmail.com`. |
 | `CRON_TIMEZONE` | No | Timezone for the local jobs. Default `Asia/Dhaka`. |
-| `BREVO_API_KEY` | For email | Brevo API key. Only a sender address needs confirming in Brevo (Senders & Domains), no DNS records. Wins over the two transports below. |
-| `RESEND_API_KEY` | For email | Resend API key. Ignored when Brevo or SMTP is configured. Without any transport nothing is sent: warranty emails are skipped and logged, and contact messages are stored with `status: failed`. |
-| `MAIL_FROM` | For email | The sender, e.g. `Sparq <orders@yourdomain.com>`. With SMTP it must be the same mailbox you log in with. |
 | `SMTP_HOST` | No | Default `smtp.gmail.com`. |
 | `SMTP_PORT` | No | Default `587` (STARTTLS). Use `465` for TLS from the start. |
-| `SMTP_USER` | No | The mailbox address, e.g. `you@gmail.com`. Setting this switches email from Resend to SMTP. |
-| `SMTP_PASS` | No | A Gmail **app password** (16 characters, needs 2-Step Verification on). The account password is rejected. |
+| `SMTP_USER` | For email | The mailbox address, e.g. `you@gmail.com`. Nothing is sent until this and `SMTP_PASS` are set: warranty emails are skipped and logged, and contact messages are stored with `status: failed`. |
+| `SMTP_PASS` | For email | A Gmail **app password** (16 characters, needs 2-Step Verification on). The account password is rejected. |
+| `MAIL_FROM` | For email | The sender, and the mailbox every message leaves as: `Sparq <you@gmail.com>`, the same address as `SMTP_USER`. The part inside `<>` must contain an `@` — a value such as `Sparq <yourshop.org>` is refused by the mailer before it leaves, with a message that names the problem. |
 | `STORE_INBOX` | No | Optional override. Claim notifications go to `supportEmail` from Site Settings; this is used only when that field is empty. |
 | `CONTACT_INBOX` | No | Optional override. The contact page writes to `contactEmail` from Site Settings, falling back to `supportEmail`. |
 | `STORE_NAME` | No | Optional override. The name in email subjects and bodies comes from `siteName` in Site Settings. |
@@ -695,17 +687,13 @@ NEXT_PUBLIC_CLIENT_URL=your_frontend_app_url
 CRON_SECRET=your_long_random_string
 DEMO_ADMIN_EMAIL=admin@gmail.com
 CRON_TIMEZONE=Asia/Dhaka
-RESEND_API_KEY=re_your_key
-MAIL_FROM="Sparq <orders@yourdomain.com>"
 
-# Optional: Brevo needs only a confirmed sender address, and logs every send.
-# BREVO_API_KEY=xkeysib_your_key
-
-# Optional: send as your own mailbox (no domain to verify) instead of Resend.
-# SMTP_HOST=smtp.gmail.com
-# SMTP_PORT=587
-# SMTP_USER=you@gmail.com
-# SMTP_PASS=your_16_character_app_password
+# Email: SMTP through your own mailbox, so there is no domain to verify.
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASS=your_16_character_app_password
+MAIL_FROM="Sparq <you@gmail.com>"
 
 # Optional: used only when the matching Site Settings field is empty.
 # STORE_INBOX=
@@ -764,7 +752,7 @@ Schedules are UTC, so `18:00` is midnight and `18:30` is 00:30 in Asia/Dhaka. On
 | Payments & transactions | ✅ Complete (simulated gateway) |
 | Loyalty points — earning, redemption, refunds, tiers | ✅ Complete |
 | Warranties — issuance with copied terms, claims and customer replies, admin review, expiry sweep | ✅ Complete |
-| Transactional email — claims, coverage, admin messages and the contact page, through Resend or your own SMTP mailbox | ✅ Complete |
+| Transactional email — claims, coverage, admin messages and the contact page, over SMTP from your own mailbox | ✅ Complete |
 | Contact page messages | ✅ Complete |
 | Reviews & rating recalculation | ✅ Complete |
 | Store settings, branding, About page copy & opening hours | ✅ Complete |

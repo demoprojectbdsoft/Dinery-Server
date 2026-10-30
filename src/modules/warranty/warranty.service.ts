@@ -407,8 +407,8 @@ export async function emailWarrantyCustomer(
     throw new ApiError(400, "This customer has no email address on file");
   }
   if (!result.sent) {
-    // Resend's reason is passed on, so "the domain is not verified" reaches the
-    // admin instead of a message that only says "it failed".
+    // The mail server's own reason is passed on, so "the login was rejected"
+    // reaches the admin instead of a message that only says "it failed".
     throw new ApiError(
       502,
       result.error
