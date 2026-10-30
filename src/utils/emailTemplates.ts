@@ -182,3 +182,38 @@ export function customMessageEmail(data: CustomMessageMailInput): string {
 
   return layout("A message about your warranty", body);
 }
+
+/* ── 5. A visitor wrote from the contact page, so the inbox gets the details ── */
+
+export interface ContactMessageMailInput {
+  storeName: string;
+  name: string;
+  email: string;
+  department: "support" | "contact";
+  subject: string;
+  message: string;
+}
+
+export function contactMessageEmail(data: ContactMessageMailInput) {
+  const department = data.department === "contact" ? "General & Business" : "Customer Support";
+
+  // The department goes in the subject so the inbox can filter on it, and the
+  // visitor's own subject is kept when they wrote one.
+  const subject = `[${department}] ${data.subject || `New message from ${data.name}`}`;
+
+  const body = `
+    <p style="margin:0 0 14px">A visitor sent this message from the ${esc(
+      data.storeName
+    )} contact page.</p>
+    ${row("Name", data.name)}
+    ${row("Email", data.email)}
+    ${row("Department", department)}
+    ${row("Subject", data.subject)}
+    <p style="margin:14px 0 6px"><strong>Message</strong></p>
+    <p style="margin:0 0 14px;white-space:pre-line;background:#f9fafb;border:1px solid #eef1f4;border-radius:8px;padding:12px">${esc(
+      data.message
+    )}</p>
+    <p style="margin:0">Reply to this email to answer the visitor directly.</p>`;
+
+  return { subject, html: layout(subject, body) };
+}
