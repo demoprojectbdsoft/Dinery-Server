@@ -9,6 +9,7 @@ const router = Router();
 router.use(requireAuth, requireRole("admin"));
 
 router.get("/", messageController.getMessages);
+router.post("/:id/reply", messageController.replyToMessage);
 router.delete("/:id", messageController.deleteMessage);
 
 export default router;

@@ -263,7 +263,8 @@ The contact page writes here; the admin reads it. Creating is not a public endpo
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `GET` | `/messages` | Admin | Paginated, newest first. Query: `status` (`all`, `sent`, `failed`), `search` (name, email or subject), `page`, `limit` |
+| `GET` | `/messages` | Admin | Paginated. Query: `status` (`all`, `sent`, `failed`), `search` (name, email or subject), `sort` (`newest`, `oldest`, `name`, `subject`), `page`, `limit` |
+| `POST` | `/messages/:id/reply` | Admin | Emails the visitor. Body: `subject`, `message`. The address is read from the stored message, never from the body |
 | `DELETE` | `/messages/:id` | Admin | |
 
 ### Store settings & demo jobs
@@ -492,8 +493,9 @@ Contact messages are the one exception to the "send after the write" rule: `POST
 | Order delivered and coverage issued | the customer, one email per item | — |
 | Admin extends the warranty | the customer, with the old and new expiry date | — |
 | Admin uses **Email Customer** | the customer | — |
+| Admin replies to a contact message | the visitor who wrote it | — |
 
-Warranty emails are **best effort**: a missing key or a rejected send is logged and never fails the claim, the delivery or the admin action. The exception is `POST /warranties/email/:id` — the admin asked for that email, so a failure comes back as `502` instead of a silent success.
+Warranty emails are **best effort**: a missing key or a rejected send is logged and never fails the claim, the delivery or the admin action. The exception is `POST /warranties/email/:id` — the admin asked for that email, so a failure comes back as `502` instead of a silent success. `POST /messages/:id/reply` behaves the same way, for the same reason.
 
 #### 7. Expiry on a serverless host
 

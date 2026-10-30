@@ -313,7 +313,34 @@ export function customMessageEmail(data: CustomMessageMailInput): string {
   });
 }
 
-/* ── 5. A visitor wrote from the contact page, so the inbox gets the details ── */
+/* ── 5. The admin answers a contact message from the dashboard ── */
+
+export interface VisitorReplyMailInput {
+  brand?: MailBrand;
+  visitorName?: string;
+  message: string;
+}
+
+/**
+ * Wraps a reply an admin typed on the messages screen. The visitor's own subject
+ * and words are already stored, so only the answer is drawn here.
+ */
+export function visitorReplyEmail(data: VisitorReplyMailInput): string {
+  const body = `
+    <p style="margin:0 0 14px">Hello ${esc(data.visitorName || "there")},</p>
+    <div style="margin:0 0 14px;white-space:pre-line">${esc(data.message)}</div>`;
+
+  // The storefront, so the visitor can pick up where they left off.
+  const base = (data.brand?.siteUrl || "").replace(/\/+$/, "");
+
+  return layout("A reply to your message", body, {
+    brand: data.brand,
+    actionLabel: "Visit the store",
+    actionHref: base,
+  });
+}
+
+/* ── 6. A visitor wrote from the contact page, so the inbox gets the details ── */
 
 export interface ContactMessageMailInput {
   storeName: string;
@@ -356,7 +383,7 @@ export function contactMessageEmail(data: ContactMessageMailInput) {
   return { subject, html: layout(subject, body, { brand: data.brand }) };
 }
 
-/* ── 6. An admin added months to a warranty, so the customer is told ── */
+/* ── 7. An admin added months to a warranty, so the customer is told ── */
 
 export interface WarrantyExtendedMailInput {
   storeName: string;
