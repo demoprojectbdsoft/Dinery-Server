@@ -22,5 +22,7 @@ router.get("/expire", requireCronOrAdmin, warrantyController.expireWarranties);
 router.get("/", requireAuth, requireRole("admin"), warrantyController.getAllWarranties);
 // Admin: process a claim
 router.patch("/claim/:id", requireAuth, requireRole("admin"), warrantyController.adminUpdateClaim);
+// Admin: email the customer about this warranty
+router.post("/email/:id", requireAuth, requireRole("admin"), warrantyController.emailCustomer);
 
 export default router;

@@ -6,9 +6,15 @@ import { refIdString } from "../../utils/ids";
 import {
   SubmitWarrantyClaimInput,
   AdminUpdateClaimInput,
+  EmailWarrantyInput,
   GetWarrantiesQuery,
 } from "./warranty.validator";
-import { IssuedWarranty, notifyClaimSubmitted, notifyClaimUpdated } from "./warranty.notifications";
+import {
+  IssuedWarranty,
+  notifyClaimSubmitted,
+  notifyClaimUpdated,
+  sendWarrantyMessage,
+} from "./warranty.notifications";
 
 /**
  * Statuses that still have a claim an admin may move forward. `active` has no
@@ -311,6 +317,28 @@ export async function adminUpdateClaim(
   await notifyClaimUpdated(warranty);
 
   return formatWarranty(warranty);
+}
+
+/**
+ * Emails the customer about one warranty on behalf of an admin. The address is
+ * read from the warranty record, so a request can never pick a different one.
+ */
+export async function emailWarrantyCustomer(
+  warrantyId: string,
+  data: EmailWarrantyInput
+): Promise<{ to: string }> {
+  const warranty = await Warranty.findById(warrantyId);
+  if (!warranty) throw new ApiError(404, "Warranty not found");
+
+  const result = await sendWarrantyMessage(warranty, data.subject, data.message);
+  if (!result.to) {
+    throw new ApiError(400, "This customer has no email address on file");
+  }
+  if (!result.sent) {
+    throw new ApiError(502, "The email could not be sent. Check the mail settings and try again.");
+  }
+
+  return { to: result.to };
 }
 
 function formatWarranty(w: any) {

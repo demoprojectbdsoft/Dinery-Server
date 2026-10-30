@@ -163,3 +163,22 @@ export function warrantyIssuedEmail(data: WarrantyIssuedMailInput) {
 
   return { subject, html: layout(subject, body) };
 }
+
+/* ── 4. An admin writes to the customer by hand about a warranty ── */
+
+export interface CustomMessageMailInput {
+  customerName?: string;
+  message: string;
+}
+
+/**
+ * Wraps a message an admin typed in the warranty screen. The subject is chosen
+ * by the admin, so only the body is built here.
+ */
+export function customMessageEmail(data: CustomMessageMailInput): string {
+  const body = `
+    <p style="margin:0 0 14px">Hello ${esc(data.customerName || "there")},</p>
+    <div style="margin:0 0 14px;white-space:pre-line">${esc(data.message)}</div>`;
+
+  return layout("A message about your warranty", body);
+}

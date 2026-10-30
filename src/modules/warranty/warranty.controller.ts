@@ -6,6 +6,7 @@ import * as warrantyService from "./warranty.service";
 import {
   submitWarrantyClaimSchema,
   adminUpdateClaimSchema,
+  emailWarrantySchema,
   getWarrantiesQuerySchema,
 } from "./warranty.validator";
 
@@ -98,4 +99,21 @@ export const adminUpdateClaim = catchAsync(async (req, res, next) => {
 export const expireWarranties = catchAsync(async (_req, res) => {
   const expired = await warrantyService.expireStaleWarranties();
   apiResponse(res, 200, { expired }, "Lapsed warranties expired");
+});
+
+/**
+ * Admin: email the customer about this warranty. The admin writes the subject
+ * and message in the dashboard, and the server picks the address.
+ */
+export const emailCustomer = catchAsync(async (req, res, next) => {
+  const parsed = emailWarrantySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return next(new ApiError(400, parsed.error.issues[0].message));
+  }
+
+  const result = await warrantyService.emailWarrantyCustomer(
+    req.params.id as string,
+    parsed.data
+  );
+  apiResponse(res, 200, result, `Email sent to ${result.to}`);
 });

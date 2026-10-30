@@ -42,6 +42,15 @@ export const adminUpdateClaimSchema = z.object({
   resolution: z.string().max(2000).optional(),
 });
 
+/**
+ * A message the admin writes to the customer from the warranty screen. The
+ * recipient is resolved from the warranty record, never from this body.
+ */
+export const emailWarrantySchema = z.object({
+  subject: z.string().trim().min(1, "Subject is required").max(150, "Subject is too long"),
+  message: z.string().trim().min(1, "Message is required").max(3000, "Message is too long"),
+});
+
 export const getWarrantiesQuerySchema = z.object({
   userId: z.string().optional(),
   productId: z.string().optional(),
@@ -53,4 +62,5 @@ export const getWarrantiesQuerySchema = z.object({
 
 export type SubmitWarrantyClaimInput = z.infer<typeof submitWarrantyClaimSchema>;
 export type AdminUpdateClaimInput = z.infer<typeof adminUpdateClaimSchema>;
+export type EmailWarrantyInput = z.infer<typeof emailWarrantySchema>;
 export type GetWarrantiesQuery = z.infer<typeof getWarrantiesQuerySchema>;

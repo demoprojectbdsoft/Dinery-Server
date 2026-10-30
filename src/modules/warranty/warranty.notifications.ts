@@ -5,6 +5,7 @@ import { sendMail } from "../../utils/mailer";
 import {
   claimSubmittedEmail,
   claimUpdatedEmail,
+  customMessageEmail,
   warrantyIssuedEmail,
 } from "../../utils/emailTemplates";
 
@@ -159,5 +160,31 @@ export async function notifyWarrantiesIssued(order: any, issued: IssuedWarranty[
     }
   } catch (err) {
     console.error("[warranty] Warranty confirmation email failed:", (err as Error).message);
+  }
+}
+
+/**
+ * Sends a message the admin typed in the warranty screen to the customer.
+ * The address is read from the warranty record, never from the request body.
+ */
+export async function sendWarrantyMessage(
+  warranty: any,
+  subject: string,
+  message: string
+): Promise<{ sent: boolean; to?: string }> {
+  try {
+    const context = await loadContext(warranty);
+    if (!context.customerEmail) return { sent: false };
+
+    const html = customMessageEmail({
+      customerName: context.customerName,
+      message,
+    });
+
+    const sent = await sendMail({ to: context.customerEmail, subject, html });
+    return { sent, to: context.customerEmail };
+  } catch (err) {
+    console.error("[warranty] Admin message email failed:", (err as Error).message);
+    return { sent: false };
   }
 }
