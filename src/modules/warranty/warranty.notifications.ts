@@ -178,7 +178,7 @@ export async function sendWarrantyMessage(
   warranty: any,
   subject: string,
   message: string
-): Promise<{ sent: boolean; to?: string }> {
+): Promise<{ sent: boolean; to?: string; error?: string }> {
   try {
     const context = await loadContext(warranty);
     if (!context.customerEmail) return { sent: false };
@@ -188,8 +188,9 @@ export async function sendWarrantyMessage(
       message,
     });
 
-    const sent = await sendMail({ to: context.customerEmail, subject, html });
-    return { sent, to: context.customerEmail };
+    // The reason travels back to the admin, who is the only one who can fix it.
+    const { sent, error } = await sendMail({ to: context.customerEmail, subject, html });
+    return { sent, to: context.customerEmail, error };
   } catch (err) {
     console.error("[warranty] Admin message email failed:", (err as Error).message);
     return { sent: false };

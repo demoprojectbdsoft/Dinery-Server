@@ -337,7 +337,14 @@ export async function emailWarrantyCustomer(
     throw new ApiError(400, "This customer has no email address on file");
   }
   if (!result.sent) {
-    throw new ApiError(502, "The email could not be sent. Check the mail settings and try again.");
+    // Resend's reason is passed on, so "the domain is not verified" reaches the
+    // admin instead of a message that only says "it failed".
+    throw new ApiError(
+      502,
+      result.error
+        ? `The email could not be sent: ${result.error}`
+        : "The email could not be sent. Check the mail settings and try again."
+    );
   }
 
   return { to: result.to };

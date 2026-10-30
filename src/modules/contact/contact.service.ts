@@ -41,7 +41,9 @@ export async function sendContactMessage(data: ContactMessageInput): Promise<voi
   });
 
   // Reply-to is the visitor, so the shop can answer straight from the inbox.
-  const sent = await sendMail({ to: inbox, subject, html, replyTo: data.email });
+  // Resend's reason is already in the server log; the visitor gets a short
+  // message, because "your domain is not verified" means nothing to them.
+  const { sent } = await sendMail({ to: inbox, subject, html, replyTo: data.email });
   if (!sent) {
     throw new ApiError(502, "The message could not be sent. Please try again in a moment.");
   }
