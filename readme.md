@@ -246,7 +246,7 @@ Every route requires a token; the owner is always taken from the token, never fr
 | `GET` | `/warranties/mine` | Bearer | The caller's coverage records |
 | `GET` | `/warranties/order/:orderId/product/:productId` | Bearer | Coverage for one order line |
 | `POST` | `/warranties/claim/:id` | Bearer | Files a claim, or answers when the store asked for info. Body: `reason`, `description`, up to 5 `images`; `problem` is optional and legacy |
-| `GET` | `/warranties` | Admin | All warranties, filterable |
+| `GET` | `/warranties` | Admin | All warranties, filterable by `status`. Besides the six real statuses, `status=claimed` is a group that returns `claim_submitted`, `under_review`, `info_requested` and `resolved` — every record a customer filed a claim on. Untouched (`active`) and closed-by-date (`expired`) records stay out of it |
 | `PATCH` | `/warranties/claim/:id` | Admin | `mark_under_review`, `request_info` (note required), `resolve` / `reject` (resolution or note required) |
 | `POST` | `/warranties/email/:id` | Admin | Emails the customer about this warranty. The address is read from the record, never from the body |
 | `GET` | `/warranties/expire` | Cron | Closes lapsed warranties. Called by Vercel Cron once a day |
@@ -449,7 +449,7 @@ An `expired` record also stores **why** it closed, because the same status cover
 
 #### 5. What the admin does
 
-1. *Dashboard → Warranties* lists every record. Clicking a row opens one dialog with the coverage, the terms, the claim text, the photos and the customer's replies.
+1. *Dashboard → Warranties* opens on the claimed records (`status=claimed`), because a warranty nobody claimed needs no admin work; the All tab and the single-status tabs are one click away. Clicking a row opens one dialog with the coverage, the terms, the claim text, the photos and the customer's replies.
 2. The admin fills an **Internal Admin Note** and **Resolution Details**, then picks one of four actions: mark under review, ask for more info, resolve, or reject.
 3. **Extend** adds months to the coverage with a required reason, up to three times, and the dialog lists every extension already granted with an `n of 3 used` counter.
 4. The buttons lock while a request is in flight, and the API enforces the same rules a second time, so two decisions can never race each other.

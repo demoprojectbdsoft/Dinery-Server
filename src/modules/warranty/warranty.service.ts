@@ -33,6 +33,13 @@ import {
 const OPEN_CLAIM_STATUSES = ["claim_submitted", "under_review", "info_requested"];
 
 /**
+ * Every status a record only reaches after a customer filed a claim. `active`
+ * means nobody has claimed yet, and `expired` can also mean the date simply
+ * passed or the order went back, so neither of those belongs to this group.
+ */
+const CLAIMED_STATUSES = [...OPEN_CLAIM_STATUSES, "resolved"];
+
+/**
  * Add `months` calendar months to a date, clamped to the last valid day of the
  * target month so that e.g. Jan 31 + 1 month lands on Feb 28/29 (not Mar 3).
  */
@@ -213,7 +220,12 @@ export async function getWarranties(query: GetWarrantiesQuery) {
   if (userId) filter.userId = userId;
   if (productId) filter.productId = productId;
   if (orderId) filter.orderId = orderId;
-  if (status) filter.status = status;
+  if (status) {
+    // "claimed" is a group, not a status: it answers "what came in from
+    // customers?", which is what the admin screen opens on. Everything else is
+    // matched exactly, so an unknown value simply finds nothing.
+    filter.status = status === "claimed" ? { $in: CLAIMED_STATUSES } : status;
+  }
 
   const skip = (page - 1) * limit;
   const [warranties, total] = await Promise.all([
