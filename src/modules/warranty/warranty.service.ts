@@ -10,6 +10,12 @@ import {
 } from "./warranty.validator";
 
 /**
+ * Statuses that still have a claim an admin may move forward. `active` has no
+ * claim yet, and `resolved` / `expired` are closed for good.
+ */
+const OPEN_CLAIM_STATUSES = ["claim_submitted", "under_review", "info_requested"];
+
+/**
  * Add `months` calendar months to a date, clamped to the last valid day of the
  * target month so that e.g. Jan 31 + 1 month lands on Feb 28/29 (not Mar 3).
  */
@@ -191,7 +197,11 @@ export async function submitClaim(
   if (warranty.userId.toString() !== userId) {
     throw new ApiError(403, "You can only claim your own warranty");
   }
-  if (warranty.status !== "active") {
+  // An active record takes the first claim. Once the admin asks for more
+  // information the customer is allowed to answer, which keeps the claim open
+  // instead of leaving it stuck with no way to reply.
+  const isReply = warranty.status === "info_requested";
+  if (warranty.status !== "active" && !isReply) {
     throw new ApiError(400, "This warranty is no longer active");
   }
   if (warranty.expiryDate && warranty.expiryDate < new Date()) {
@@ -203,8 +213,21 @@ export async function submitClaim(
   // current form leaves the field empty instead of saving `undefined`.
   if (data.problem) warranty.claimProblem = data.problem;
   warranty.claimReason = data.reason;
-  warranty.claimDescription = data.description;
-  warranty.claimImages = data.images || [];
+
+  if (isReply) {
+    // Keep the first description untouched and add the answer to the thread, so
+    // the admin can read both the question's context and the new details.
+    warranty.claimReplies.push({
+      message: data.description,
+      createdAt: new Date(),
+    });
+    const mergedImages = [...(warranty.claimImages || []), ...(data.images || [])];
+    warranty.claimImages = mergedImages.slice(0, 5);
+  } else {
+    warranty.claimDescription = data.description;
+    warranty.claimImages = data.images || [];
+  }
+
   await warranty.save();
 
   return formatWarranty(warranty);
@@ -224,27 +247,50 @@ export async function adminUpdateClaim(
   const warranty = await Warranty.findById(warrantyId);
   if (!warranty) throw new ApiError(404, "Warranty not found");
 
+  // Every action may only move an open claim. Without this check the API would
+  // happily "resolve" a warranty that was never claimed, or reopen a closed one.
+  if (!OPEN_CLAIM_STATUSES.includes(warranty.status)) {
+    const reason =
+      warranty.status === "resolved"
+        ? "This claim is already resolved"
+        : warranty.status === "expired"
+          ? "This claim is closed, so no further action can be taken"
+          : "No claim has been submitted for this warranty yet";
+    throw new ApiError(400, reason);
+  }
+
+  // The UI already asks for these, but the API must not accept a silent no-op.
+  const note = data.adminNote?.trim();
+  const resolution = data.resolution?.trim();
+
+  if (data.action === "request_info" && !note) {
+    throw new ApiError(400, "Add a note so the customer knows what information is needed");
+  }
+  if ((data.action === "resolve" || data.action === "reject") && !resolution && !note) {
+    throw new ApiError(400, "Provide resolution details or an admin note");
+  }
+
   switch (data.action) {
     case "mark_under_review":
       warranty.status = "under_review";
       break;
     case "request_info":
       warranty.status = "info_requested";
-      warranty.claimAdminNote = data.adminNote ?? warranty.claimAdminNote;
       break;
     case "resolve":
       warranty.status = "resolved";
-      warranty.resolutionDetails = data.resolution ?? data.adminNote ?? "";
-      warranty.claimAdminNote = data.adminNote ?? warranty.claimAdminNote;
+      warranty.resolutionDetails = resolution || note || "";
       break;
     case "reject":
       warranty.status = "expired";
-      warranty.resolutionDetails = data.resolution ?? data.adminNote ?? "Claim rejected";
-      warranty.claimAdminNote = data.adminNote ?? warranty.claimAdminNote;
+      warranty.resolutionDetails = resolution || note || "Claim rejected";
       break;
     default:
       throw new ApiError(400, "Unknown action");
   }
+
+  // An empty note never wipes what an earlier admin wrote.
+  if (note) warranty.claimAdminNote = note;
 
   await warranty.save();
   return formatWarranty(warranty);
@@ -266,6 +312,12 @@ function formatWarranty(w: any) {
     claimReason: w.claimReason,
     claimDescription: w.claimDescription,
     claimImages: Array.isArray(w.claimImages) ? w.claimImages : [],
+    claimReplies: Array.isArray(w.claimReplies)
+      ? w.claimReplies.map((reply: any) => ({
+          message: reply.message,
+          createdAt: reply.createdAt,
+        }))
+      : [],
     claimAdminNote: w.claimAdminNote,
     resolutionDetails: w.resolutionDetails,
   });

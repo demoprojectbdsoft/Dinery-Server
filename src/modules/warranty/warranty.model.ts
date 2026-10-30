@@ -26,6 +26,14 @@ const warrantySchema = new Schema(
     claimReason: { type: String },
     claimDescription: { type: String },
     claimImages: [{ type: String }],
+    // Follow-up messages the customer sends after the admin asks for more
+    // information. The first claim stays in claimDescription, so nothing is lost.
+    claimReplies: [
+      {
+        message: { type: String, required: true },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     claimAdminNote: { type: String },
     resolutionDetails: { type: String },
   },
