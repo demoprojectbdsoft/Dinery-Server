@@ -83,6 +83,7 @@ src/
 │   ├── error.middleware.ts    one JSON error shape for the whole API
 │   └── notFound.middleware.ts 404 for unknown routes
 ├── modules/
+│   ├── address/               saved shipping addresses (one row per address)
 │   ├── cart/                  cart items
 │   ├── category/              top-level categories
 │   ├── contact/               contact-page messages, emailed to the store inbox
@@ -107,7 +108,7 @@ src/
     ├── transactions.ts        withTransaction() with standalone fallback
     ├── ids.ts                 ObjectId helpers
     ├── emailTemplates.ts      every email body (claims, coverage, contact page)
-    ├── mailer.ts              Resend HTTPS sender, timeout, never throws
+    ├── mailer.ts              Resend over HTTPS, or your own SMTP mailbox; never throws
     └── roles.ts               role normalisation
 ```
 
@@ -219,6 +220,18 @@ Both routers apply `requireAuth` to every route. The `:userId` path variants are
 | `GET` | `/users/:id` | Bearer | Owner or admin only |
 | `PATCH` | `/users/:id` | Bearer | Admin: any account, any field. Customer: own profile, safe fields only |
 | `DELETE` | `/users/:id` | Admin | |
+
+### Saved addresses
+
+Every route requires a token; the owner is always taken from the token, never from the body or the URL.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| `GET` | `/addresses` | Bearer | The caller's addresses, default first |
+| `POST` | `/addresses` | Bearer | Body: `fullName`, `phone`, `address`, `city`, `postalCode`, optional `label` and `isDefault`. Returns `200` when that address was already saved, `201` when it is new |
+| `PATCH` | `/addresses/:id/default` | Bearer | Makes this the only default address |
+| `PATCH` | `/addresses/:id` | Bearer | Any field except `isDefault` |
+| `DELETE` | `/addresses/:id` | Bearer | Removing the default promotes the newest remaining address |
 
 ### Warranties
 
@@ -405,7 +418,23 @@ The type is a label on the record plus free-text `warrantyTerms`. **The claim pi
 
 #### 6. Emails
 
-Every message is sent **after** the database write, through Resend's HTTPS API with an 8 second timeout. The sender comes from `MAIL_FROM`; the store name and both recipient addresses are read from **Site Settings** (`siteName`, `supportEmail`, `contactEmail`), so the owner changes them in the dashboard instead of in a deployment.
+Every message is sent **after** the database write, with an 8 second timeout, and a failure never fails the request that triggered it. The sender comes from `MAIL_FROM`; the store name and both recipient addresses are read from **Site Settings** (`siteName`, `supportEmail`, `contactEmail`), so the owner changes them in the dashboard instead of in a deployment.
+
+There are two transports, and the environment picks one:
+
+| When | Transport | Why |
+|---|---|---|
+| `SMTP_USER` + `SMTP_PASS` are set | SMTP through your own mailbox (Nodemailer) | Mail leaves as a real address, so it reaches customers with no domain to verify. Keep the timeouts short: a serverless host may cut the handshake off |
+| Otherwise, with `RESEND_API_KEY` | Resend's HTTPS API | The safe serverless path, but Resend only sends from a verified domain — or from `onboarding@resend.dev`, which reaches nobody except the account owner |
+
+```
+Sending domain check
+--------------------
+sparq.bdsoft.org is a CNAME to Vercel, and DNS allows no record
+under a CNAME, so send.sparq / rsend.sparq / resend._domainkey.sparq
+can never be created. Verify the bare domain (bdsoft.org) instead,
+and give Resend records named send, rsend and resend._domainkey.
+```
 
 | Trigger | Recipient | Reply-to |
 |---|---|---|
@@ -567,8 +596,12 @@ To check end to end: sign in as the demo admin, add a category and edit a produc
 | `CRON_SECRET` | For cron | Long random string guarding `/api/demo/restore`. Generate with `openssl rand -hex 24`. |
 | `DEMO_ADMIN_EMAIL` | No | Email of the shared demo admin. Default `admin@gmail.com`. |
 | `CRON_TIMEZONE` | No | Timezone for the local jobs. Default `Asia/Dhaka`. |
-| `RESEND_API_KEY` | For email | Resend API key. Without it nothing is sent: warranty emails are skipped and logged, and the contact form answers `503`. |
-| `MAIL_FROM` | For email | Verified sender, e.g. `Sparq <orders@yourdomain.com>`. Resend rejects a domain that is not verified. |
+| `RESEND_API_KEY` | For email | Resend API key. Ignored when SMTP is configured. Without either transport nothing is sent: warranty emails are skipped and logged, and the contact form answers `503`. |
+| `MAIL_FROM` | For email | The sender, e.g. `Sparq <orders@yourdomain.com>`. With SMTP it must be the same mailbox you log in with. |
+| `SMTP_HOST` | No | Default `smtp.gmail.com`. |
+| `SMTP_PORT` | No | Default `587` (STARTTLS). Use `465` for TLS from the start. |
+| `SMTP_USER` | No | The mailbox address, e.g. `you@gmail.com`. Setting this switches email from Resend to SMTP. |
+| `SMTP_PASS` | No | A Gmail **app password** (16 characters, needs 2-Step Verification on). The account password is rejected. |
 | `STORE_INBOX` | No | Optional override. Claim notifications go to `supportEmail` from Site Settings; this is used only when that field is empty. |
 | `CONTACT_INBOX` | No | Optional override. The contact page writes to `contactEmail` from Site Settings, falling back to `supportEmail`. |
 | `STORE_NAME` | No | Optional override. The name in email subjects and bodies comes from `siteName` in Site Settings. |
@@ -582,6 +615,12 @@ DEMO_ADMIN_EMAIL=admin@gmail.com
 CRON_TIMEZONE=Asia/Dhaka
 RESEND_API_KEY=re_your_key
 MAIL_FROM="Sparq <orders@yourdomain.com>"
+
+# Optional: send as your own mailbox (no domain to verify) instead of Resend.
+# SMTP_HOST=smtp.gmail.com
+# SMTP_PORT=587
+# SMTP_USER=you@gmail.com
+# SMTP_PASS=your_16_character_app_password
 
 # Optional: used only when the matching Site Settings field is empty.
 # STORE_INBOX=
@@ -640,7 +679,7 @@ Schedules are UTC, so `18:00` is midnight and `18:30` is 00:30 in Asia/Dhaka. On
 | Payments & transactions | ✅ Complete (simulated gateway) |
 | Loyalty points — earning, redemption, refunds, tiers | ✅ Complete |
 | Warranties — issuance with copied terms, claims and customer replies, admin review, expiry sweep | ✅ Complete |
-| Transactional email — claims, coverage, admin messages and the contact page, through Resend | ✅ Complete |
+| Transactional email — claims, coverage, admin messages and the contact page, through Resend or your own SMTP mailbox | ✅ Complete |
 | Contact page messages | ✅ Complete |
 | Reviews & rating recalculation | ✅ Complete |
 | Store settings, branding, About page copy & opening hours | ✅ Complete |
