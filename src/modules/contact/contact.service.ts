@@ -1,17 +1,31 @@
-import { ApiError } from "../../utils/apiError";
 import { isMailConfigured, sendMail } from "../../utils/mailer";
 import { contactMessageEmail } from "../../utils/emailTemplates";
 import { getMailIdentity } from "../site-settings/site-settings.service";
+import * as messageService from "../message/message.service";
 import { ContactMessageInput } from "./contact.validator";
 
 /**
- * Emails a visitor's message to the store inbox.
+ * Saves a visitor's message, then emails a copy to the store inbox.
  *
- * Unlike the warranty notifications this email *is* the feature, so a failure is
- * reported back instead of being swallowed: telling the visitor "sent" when
- * nothing left the server would leave them waiting for a reply that never comes.
+ * The order matters: the message is written to the database **first**, so a
+ * mail problem can never lose what somebody took the time to write. The admin
+ * reads it in Dashboard -> Messages, and the record says whether the email copy
+ * went out or what stopped it.
+ *
+ * That is also why a mail failure no longer answers an error: the message was
+ * received, and the visitor is told so.
  */
-export async function sendContactMessage(data: ContactMessageInput): Promise<void> {
+export async function sendContactMessage(
+  data: ContactMessageInput
+): Promise<{ delivered: boolean }> {
+  const note = await messageService.saveMessage({
+    name: data.name,
+    email: data.email,
+    department: data.department,
+    subject: data.subject,
+    body: data.message,
+  });
+
   // The name and both addresses come from Site Settings, so the owner changes
   // them in the dashboard instead of in a deployment.
   const { storeName, supportInbox, contactInbox } = await getMailIdentity();
@@ -22,13 +36,15 @@ export async function sendContactMessage(data: ContactMessageInput): Promise<voi
   const inbox = isGeneral ? contactInbox : supportInbox;
 
   if (!inbox) {
-    throw new ApiError(
-      503,
+    await messageService.markFailed(
+      note._id,
       `Site Settings has no ${isGeneral ? "contact" : "support"} email yet`
     );
+    return { delivered: false };
   }
   if (!isMailConfigured()) {
-    throw new ApiError(503, "Email sending is not configured yet");
+    await messageService.markFailed(note._id, "Email sending is not configured yet");
+    return { delivered: false };
   }
 
   const { subject, html } = contactMessageEmail({
@@ -41,10 +57,18 @@ export async function sendContactMessage(data: ContactMessageInput): Promise<voi
   });
 
   // Reply-to is the visitor, so the shop can answer straight from the inbox.
-  // Resend's reason is already in the server log; the visitor gets a short
-  // message, because "your domain is not verified" means nothing to them.
-  const { sent } = await sendMail({ to: inbox, subject, html, replyTo: data.email });
+  const { sent, error } = await sendMail({
+    to: inbox,
+    subject,
+    html,
+    replyTo: data.email,
+  });
+
   if (!sent) {
-    throw new ApiError(502, "The message could not be sent. Please try again in a moment.");
+    await messageService.markFailed(note._id, error || "The email was not accepted");
+    return { delivered: false };
   }
+
+  await messageService.markSent(note._id, inbox);
+  return { delivered: true };
 }

@@ -86,8 +86,9 @@ src/
 │   ├── address/               saved shipping addresses (one row per address)
 │   ├── cart/                  cart items
 │   ├── category/              top-level categories
-│   ├── contact/               contact-page messages, emailed to the store inbox
+│   ├── contact/               contact-page messages, saved then emailed to the store inbox
 │   ├── demo/                  demo-admin write tracking + restore endpoint
+│   ├── message/               stored contact messages, read in the admin dashboard
 │   ├── order/                 order placement, status flow, cancellation, delivery
 │   ├── order-status/          status history log
 │   ├── product/               product catalog
@@ -249,7 +250,16 @@ Every route requires a token; the owner is always taken from the token, never fr
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `POST` | `/contact` | Public | Contact-page message. Body: `name`, `email`, `message` (10–3000 characters), optional `subject` and `department` (`support` or `contact`). Emailed to the address saved in Site Settings — `contactEmail` for General & Business, `supportEmail` otherwise |
+| `POST` | `/contact` | Public | Contact-page message. Body: `name`, `email`, `message` (10–3000 characters), optional `subject` and `department` (`support` or `contact`). **Saved first**, then emailed to the address in Site Settings — `contactEmail` for General & Business, `supportEmail` otherwise. The reply's `delivered` says whether the email copy went out |
+
+### Messages
+
+The contact page writes here; the admin reads it. Creating is not a public endpoint — a message only ever appears through `POST /contact`.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| `GET` | `/messages` | Admin | Paginated, newest first. Query: `status` (`all`, `sent`, `failed`), `search` (name, email or subject), `page`, `limit` |
+| `DELETE` | `/messages/:id` | Admin | |
 
 ### Store settings & demo jobs
 
@@ -420,12 +430,15 @@ The type is a label on the record plus free-text `warrantyTerms`. **The claim pi
 
 Every message is sent **after** the database write, with an 8 second timeout, and a failure never fails the request that triggered it. The sender comes from `MAIL_FROM`; the store name and both recipient addresses are read from **Site Settings** (`siteName`, `supportEmail`, `contactEmail`), so the owner changes them in the dashboard instead of in a deployment.
 
-There are two transports, and the environment picks one:
+There are three transports, and whichever credential exists wins in this order: Brevo, then SMTP, then Resend.
 
 | When | Transport | Why |
 |---|---|---|
-| `SMTP_USER` + `SMTP_PASS` are set | SMTP through your own mailbox (Nodemailer) | Mail leaves as a real address, so it reaches customers with no domain to verify. Keep the timeouts short: a serverless host may cut the handshake off |
-| Otherwise, with `RESEND_API_KEY` | Resend's HTTPS API | The safe serverless path, but Resend only sends from a verified domain — or from `onboarding@resend.dev`, which reaches nobody except the account owner |
+| `BREVO_API_KEY` is set | Brevo's HTTPS API | Only a **sender address** has to be confirmed, never a domain, and Brevo keeps a delivery log per message. Free plan: 300/day |
+| otherwise `SMTP_USER` + `SMTP_PASS` | SMTP through your own mailbox (Nodemailer) | Mail leaves as a real address, so it reaches customers with no domain to verify. Keep the timeouts short: a serverless host may cut the handshake off |
+| otherwise `RESEND_API_KEY` | Resend's HTTPS API | The safe serverless path, but Resend only sends from a verified domain — or from `onboarding@resend.dev`, which reaches nobody except the account owner |
+
+Contact messages are the one exception to the "send after the write" rule: `POST /contact` stores the message **before** it tries to send, so a mail failure can never lose it. The record keeps the reason (`status: failed`, `error: ...`), and the visitor is told the message was received.
 
 ```
 Sending domain check
@@ -596,7 +609,8 @@ To check end to end: sign in as the demo admin, add a category and edit a produc
 | `CRON_SECRET` | For cron | Long random string guarding `/api/demo/restore`. Generate with `openssl rand -hex 24`. |
 | `DEMO_ADMIN_EMAIL` | No | Email of the shared demo admin. Default `admin@gmail.com`. |
 | `CRON_TIMEZONE` | No | Timezone for the local jobs. Default `Asia/Dhaka`. |
-| `RESEND_API_KEY` | For email | Resend API key. Ignored when SMTP is configured. Without either transport nothing is sent: warranty emails are skipped and logged, and the contact form answers `503`. |
+| `BREVO_API_KEY` | For email | Brevo API key. Only a sender address needs confirming in Brevo (Senders & Domains), no DNS records. Wins over the two transports below. |
+| `RESEND_API_KEY` | For email | Resend API key. Ignored when Brevo or SMTP is configured. Without any transport nothing is sent: warranty emails are skipped and logged, and contact messages are stored with `status: failed`. |
 | `MAIL_FROM` | For email | The sender, e.g. `Sparq <orders@yourdomain.com>`. With SMTP it must be the same mailbox you log in with. |
 | `SMTP_HOST` | No | Default `smtp.gmail.com`. |
 | `SMTP_PORT` | No | Default `587` (STARTTLS). Use `465` for TLS from the start. |
@@ -615,6 +629,9 @@ DEMO_ADMIN_EMAIL=admin@gmail.com
 CRON_TIMEZONE=Asia/Dhaka
 RESEND_API_KEY=re_your_key
 MAIL_FROM="Sparq <orders@yourdomain.com>"
+
+# Optional: Brevo needs only a confirmed sender address, and logs every send.
+# BREVO_API_KEY=xkeysib_your_key
 
 # Optional: send as your own mailbox (no domain to verify) instead of Resend.
 # SMTP_HOST=smtp.gmail.com
