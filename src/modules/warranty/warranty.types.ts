@@ -110,6 +110,19 @@ export function hasWarrantyCoverage(
  */
 export const MAX_WARRANTY_EXTENSIONS = 3;
 
+/**
+ * The one type an admin may lengthen. An Extended warranty exists to run past
+ * the manufacturer's own period, so it is the only kind that can be topped up;
+ * a manufacturer or seller warranty covers exactly the period it was sold with,
+ * and adding months to it would promise time nobody sold.
+ */
+export const EXTENDABLE_WARRANTY_TYPE: WarrantyType = "extended-warranty";
+
+/** True when an admin may add months to a record of this type. */
+export function isExtendableWarrantyType(type?: string | null): boolean {
+  return type === EXTENDABLE_WARRANTY_TYPE;
+}
+
 /** Extension slots a record still has. Never negative. */
 export function extensionsLeft(extensions?: { months?: number }[] | null): number {
   const used = Array.isArray(extensions) ? extensions.length : 0;

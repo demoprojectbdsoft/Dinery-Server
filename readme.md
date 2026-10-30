@@ -437,6 +437,7 @@ An `expired` record also stores **why** it closed, because the same status cover
 - `warrantyPeriodMonths` keeps the **original** promise; only `expiryDate` moves. Screens show the real total (`18 months (+6 extended)`) so a longer date is never unexplained.
 - A lapsed record (`closedReason: date`, no claim) becomes `active` again. A rejected or void record keeps its status.
 - Records with no coverage cannot be extended, and neither can records on a cancelled order.
+- **Only an `extended-warranty` record can be extended.** A manufacturer, seller or other warranty covers exactly the period it was sold with, so the service answers those with a `400` and the dashboard hides the extend section for them (`EXTENDABLE_WARRANTY_TYPE` in `warranty.types.ts`).
 - The customer is emailed the old date, the new date and the reason (best effort, like every warranty email).
 
 #### 4. What the customer sees
@@ -449,9 +450,9 @@ An `expired` record also stores **why** it closed, because the same status cover
 
 #### 5. What the admin does
 
-1. *Dashboard → Warranties* opens on the claimed records (`status=claimed`), because a warranty nobody claimed needs no admin work; the status select, the warranty-type filter and the All view are one click away. Clicking a row opens one dialog with the coverage, the claim text, the photos and the customer's replies. The **Extend** form only appears while the record can still be extended.
+1. *Dashboard → Warranties* opens on the claimed records (`status=claimed`), because a warranty nobody claimed needs no admin work; the status select, the warranty-type filter and the All view are one click away. Clicking a row opens one dialog with the coverage, the claim text, the photos and the customer's replies. The **Extend** section only appears on an Extended warranty that can still take another extension.
 2. The admin fills an **Internal Admin Note** and **Resolution Details**, then picks one of four actions: mark under review, ask for more info, resolve, or reject.
-3. **Extend** adds months to the coverage with a required reason, up to three times, and the dialog lists every extension already granted with an `n of 3 used` counter.
+3. **Extend** adds months to the coverage of an **Extended warranty** with a required reason, up to three times, and the dialog lists every extension already granted with an `n of 3 used` counter. Other warranty types show no extend section at all.
 4. The buttons lock while a request is in flight, and the API enforces the same rules a second time, so two decisions can never race each other.
 5. **Email Customer** opens a composer that is already filled in from the claim — name, product, order number, reason, description, latest reply and coverage — and sends it to the address stored on the record.
 

@@ -22,6 +22,7 @@ import {
   describeWarrantyType,
   extensionsLeft,
   hasWarrantyCoverage,
+  isExtendableWarrantyType,
   isWarrantyType,
   MAX_WARRANTY_EXTENSIONS,
 } from "./warranty.types";
@@ -457,6 +458,15 @@ export async function extendWarranty(
     throw new ApiError(
       400,
       "This item was sold without warranty coverage, so there is nothing to extend"
+    );
+  }
+
+  // Extension belongs to the Extended warranty. A manufacturer or seller
+  // warranty covers exactly the period it was sold with, so it stays untouched.
+  if (!isExtendableWarrantyType(warranty.warrantyType)) {
+    throw new ApiError(
+      400,
+      "Only an extended warranty can be extended, so this coverage stays as it is"
     );
   }
   await assertOrderStillCovered(warranty.orderId);
