@@ -108,7 +108,7 @@ src/
     ├── authz.ts               identity / ownership helpers
     ├── transactions.ts        withTransaction() with standalone fallback
     ├── ids.ts                 ObjectId helpers
-    ├── emailTemplates.ts      every email body (claims, coverage, contact page)
+    ├── emailTemplates.ts      every email body, drawn with the brand from Site Settings
     ├── mailer.ts              Resend over HTTPS, or your own SMTP mailbox; never throws
     └── roles.ts               role normalisation
 ```
@@ -453,6 +453,21 @@ An `expired` record also stores **why** it closed, because the same status cover
 #### 6. Emails
 
 Every message is sent **after** the database write, with an 8 second timeout, and a failure never fails the request that triggered it. The sender comes from `MAIL_FROM`; the store name and both recipient addresses are read from **Site Settings** (`siteName`, `supportEmail`, `contactEmail`), so the owner changes them in the dashboard instead of in a deployment.
+
+The **look** is read from the same place, so a rebrand needs no redeploy. `getMailIdentity()` builds a `MailBrand` and every template draws from it:
+
+| Site Settings | Becomes |
+|---|---|
+| `colorPalette.primary` | the 4px rule at the top of the card, and every button |
+| `colorPalette.primaryDark` (falls back to `primary`) | the heading text |
+| `colorPalette.accent` | the 3px rule under the header |
+| `colorPalette.surface` | the page background behind the white card |
+| `navbarLogo.light` (falls back to `footerLogo`) | the logo above the heading |
+| `typography.primaryFont` | the font stack, ending in `Helvetica, Arial` because web fonts do not load in mail |
+| `supportPhone`, `supportEmail` | the footer contact line |
+| `NEXT_PUBLIC_CLIENT_URL` | the "view your order" / "open warranties" button |
+
+When Site Settings cannot be read, `DEFAULT_BRAND` takes over, so an email is styled even with an empty settings record. The body stays inside what mail clients really render: nested divs, inline styles and solid colours — no flexbox, no stylesheets, no background images, and buttons are link blocks because a real `<button>` does nothing in a mailbox.
 
 There are three transports, and whichever credential exists wins in this order: Brevo, then SMTP, then Resend.
 

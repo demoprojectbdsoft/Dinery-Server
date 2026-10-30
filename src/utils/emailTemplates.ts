@@ -1,7 +1,12 @@
 /**
- * The email bodies the store sends. Kept as plain strings on purpose: three
+ * The email bodies the store sends. Kept as plain strings on purpose: a few
  * short messages do not need a template engine, and every value is escaped so a
  * customer's own words can never break the HTML.
+ *
+ * Colours, logo and typeface come from Site Settings (`getMailIdentity()`), so
+ * the owner rebrands the shop in the dashboard and every email follows. What is
+ * drawn here stays inside what mail clients really render: nested divs, inline
+ * styles and solid colours — no flexbox, no stylesheets, no background images.
  */
 
 /** Customer text goes into HTML, so angle brackets and quotes are neutralised. */
@@ -14,18 +19,118 @@ function esc(value?: string | number | null): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Shared frame: heading, body, and a quiet footer. */
-function layout(heading: string, body: string): string {
+/**
+ * What an email needs to look like the shop. Built once per send from Site
+ * Settings, so a colour change needs no redeploy.
+ */
+export interface MailBrand {
+  storeName: string;
+  /** Logo image, shown above the heading when one is uploaded. */
+  logoUrl?: string;
+  /** The palette's primary colour: the top rule, buttons and links. */
+  primary: string;
+  /** A darker shade of the same colour, used for the heading text. */
+  primaryDark: string;
+  /** A thin highlight rule under the header. */
+  accent: string;
+  /** Page background behind the white card. */
+  surface: string;
+  /** Font stack. Web fonts do not load in mail, so this is a fallback stack. */
+  fontFamily: string;
+  supportEmail?: string;
+  supportPhone?: string;
+  /** Shop address, used to build the "view your order" links. */
+  siteUrl?: string;
+}
+
+/** Used when Site Settings cannot be read, so an email is never left unstyled. */
+export const DEFAULT_BRAND: MailBrand = {
+  storeName: "Sparq",
+  primary: "#0284c7",
+  primaryDark: "#0369a1",
+  accent: "#f59e0b",
+  surface: "#f6f7f9",
+  fontFamily: "Arial, Helvetica, sans-serif",
+};
+
+/** Link to the customer's own orders, where claims and coverage live. */
+function ordersUrl(brand?: MailBrand): string {
+  const base = (brand?.siteUrl || "").replace(/\/+$/, "");
+  return base ? `${base}/dashboard/customer/orders` : "";
+}
+
+/** Link to the admin warranty screen, used by the emails sent to the store. */
+function adminWarrantiesUrl(brand?: MailBrand): string {
+  const base = (brand?.siteUrl || "").replace(/\/+$/, "");
+  return base ? `${base}/dashboard/admin/warranties` : "";
+}
+
+/**
+ * One button. Drawn as a link on a coloured block, because a real <button>
+ * does nothing in a mail client.
+ */
+function button(label: string, href: string, brand: MailBrand): string {
+  if (!href) return "";
+  return `<p style="margin:22px 0 0">
+        <a href="${esc(href)}" style="display:inline-block;padding:11px 20px;border-radius:8px;background:${esc(
+          brand.primary
+        )};color:#ffffff;font-size:14px;font-weight:bold;text-decoration:none">${esc(
+          label
+        )}</a>
+      </p>`;
+}
+
+interface LayoutOptions {
+  brand?: MailBrand;
+  /** Optional call-to-action at the bottom of the body. */
+  actionLabel?: string;
+  actionHref?: string;
+}
+
+/**
+ * Shared frame: a brand rule, the logo and heading, the body, one button, and a
+ * quiet footer that says who sent it and how to reach them.
+ */
+function layout(heading: string, body: string, options: LayoutOptions = {}): string {
+  const brand = options.brand || DEFAULT_BRAND;
+
+  // Mail clients need an explicit size; a missing logo simply leaves no image.
+  const logo = brand.logoUrl
+    ? `<img src="${esc(brand.logoUrl)}" alt="${esc(
+        brand.storeName
+      )}" style="height:32px;max-width:200px;display:block;margin:0 0 14px;border:0">`
+    : "";
+
+  // Both halves of the footer are optional, so a half-filled Site Settings
+  // record never prints a stray dot.
+  const contact = [brand.supportEmail, brand.supportPhone]
+    .filter((value) => Boolean(value))
+    .map((value) => esc(value))
+    .join(" &middot; ");
+
   return `
-  <div style="font-family:Arial,Helvetica,sans-serif;background:#f6f7f9;padding:24px">
+  <div style="margin:0;padding:24px;background:${esc(brand.surface)};font-family:${esc(
+    brand.fontFamily
+  )}">
     <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden">
-      <div style="padding:20px 24px;border-bottom:1px solid #eef1f4">
-        <h1 style="margin:0;font-size:18px;color:#111827">${esc(heading)}</h1>
+      <div style="height:4px;background:${esc(brand.primary)}"></div>
+      <div style="padding:20px 24px;border-bottom:3px solid ${esc(brand.accent)}">
+        ${logo}
+        <h1 style="margin:0;font-size:18px;line-height:1.3;color:${esc(
+          brand.primaryDark
+        )}">${esc(heading)}</h1>
+        <p style="margin:4px 0 0;font-size:12px;color:#6b7280">${esc(brand.storeName)}</p>
       </div>
-      <div style="padding:24px;font-size:14px;line-height:1.6;color:#374151">${body}</div>
-      <div style="padding:16px 24px;border-top:1px solid #eef1f4;font-size:12px;color:#6b7280">
-        This message was sent automatically by the store. Please do not reply to the
-        sender address if your mail app asks you to choose one.
+      <div style="padding:24px;font-size:14px;line-height:1.6;color:#374151">${body}${button(
+        options.actionLabel || "",
+        options.actionHref || "",
+        brand
+      )}</div>
+      <div style="padding:16px 24px;border-top:1px solid #eef1f4;font-size:12px;line-height:1.6;color:#6b7280">
+        ${contact ? `<p style="margin:0 0 6px">${contact}</p>` : ""}
+        <p style="margin:0">This message was sent automatically by ${esc(
+          brand.storeName
+        )}. Please do not reply to the sender address if your mail app asks you to choose one.</p>
       </div>
     </div>
   </div>`;
@@ -41,6 +146,8 @@ function row(label: string, value?: string | number | null): string {
 
 export interface ClaimSubmittedMailInput {
   storeName: string;
+  /** Site Settings colours and logo. Falls back to DEFAULT_BRAND. */
+  brand?: MailBrand;
   customerName?: string;
   customerEmail?: string;
   orderNumber?: string;
@@ -59,7 +166,9 @@ export function claimSubmittedEmail(data: ClaimSubmittedMailInput) {
   const images = (data.images || [])
     .map(
       (url) =>
-        `<li><a href="${esc(url)}" style="color:#2563eb">${esc(url)}</a></li>`
+        `<li><a href="${esc(url)}" style="color:${esc(
+          data.brand?.primary || DEFAULT_BRAND.primary
+        )}">${esc(url)}</a></li>`
     )
     .join("");
 
@@ -81,13 +190,21 @@ export function claimSubmittedEmail(data: ClaimSubmittedMailInput) {
     ${images ? `<p style="margin:0 0 6px"><strong>Photos</strong></p><ul style="margin:0 0 14px">${images}</ul>` : ""}
     <p style="margin:0">Open the admin dashboard to review, ask for more information, or resolve the claim.</p>`;
 
-  return { subject: heading, html: layout(heading, body) };
+  return {
+    subject: heading,
+    html: layout(heading, body, {
+      brand: data.brand,
+      actionLabel: "Open the warranty dashboard",
+      actionHref: adminWarrantiesUrl(data.brand),
+    }),
+  };
 }
 
 /* ── 2. An admin moved the claim, so the customer is told what happens next ── */
 
 export interface ClaimUpdatedMailInput {
   storeName: string;
+  brand?: MailBrand;
   customerName?: string;
   productTitle?: string;
   orderNumber?: string;
@@ -124,13 +241,21 @@ export function claimUpdatedEmail(data: ClaimUpdatedMailInput) {
     }
     <p style="margin:0">You can follow the claim from your orders page in your account.</p>`;
 
-  return { subject, html: layout(subject, body) };
+  return {
+    subject,
+    html: layout(subject, body, {
+      brand: data.brand,
+      actionLabel: "View your orders",
+      actionHref: ordersUrl(data.brand),
+    }),
+  };
 }
 
 /* ── 3. Delivery created the coverage, so the customer gets it in writing ── */
 
 export interface WarrantyIssuedMailInput {
   storeName: string;
+  brand?: MailBrand;
   customerName?: string;
   productTitle?: string;
   orderNumber?: string;
@@ -161,12 +286,20 @@ export function warrantyIssuedEmail(data: WarrantyIssuedMailInput) {
     }
     <p style="margin:0">If the product develops a problem, open the order in your account and use the claim form.</p>`;
 
-  return { subject, html: layout(subject, body) };
+  return {
+    subject,
+    html: layout(subject, body, {
+      brand: data.brand,
+      actionLabel: "View your warranty",
+      actionHref: ordersUrl(data.brand),
+    }),
+  };
 }
 
 /* ── 4. An admin writes to the customer by hand about a warranty ── */
 
 export interface CustomMessageMailInput {
+  brand?: MailBrand;
   customerName?: string;
   message: string;
 }
@@ -180,13 +313,18 @@ export function customMessageEmail(data: CustomMessageMailInput): string {
     <p style="margin:0 0 14px">Hello ${esc(data.customerName || "there")},</p>
     <div style="margin:0 0 14px;white-space:pre-line">${esc(data.message)}</div>`;
 
-  return layout("A message about your warranty", body);
+  return layout("A message about your warranty", body, {
+    brand: data.brand,
+    actionLabel: "View your warranty",
+    actionHref: ordersUrl(data.brand),
+  });
 }
 
 /* ── 5. A visitor wrote from the contact page, so the inbox gets the details ── */
 
 export interface ContactMessageMailInput {
   storeName: string;
+  brand?: MailBrand;
   name: string;
   email: string;
   department: "support" | "contact";
@@ -221,13 +359,15 @@ export function contactMessageEmail(data: ContactMessageMailInput) {
     )}</p>
     <p style="margin:0">Reply to this email to answer the visitor directly.</p>`;
 
-  return { subject, html: layout(subject, body) };
+  // No button here: the reply happens in the inbox, not on a web page.
+  return { subject, html: layout(subject, body, { brand: data.brand }) };
 }
 
 /* ── 6. An admin added months to a warranty, so the customer is told ── */
 
 export interface WarrantyExtendedMailInput {
   storeName: string;
+  brand?: MailBrand;
   customerName?: string;
   productTitle?: string;
   orderNumber?: string;
@@ -256,5 +396,12 @@ export function warrantyExtendedEmail(data: WarrantyExtendedMailInput) {
     ${row("Reason", data.reason)}
     <p style="margin:0">You can check this at any time under My Account → Orders → Warranty.</p>`;
 
-  return { subject, html: layout(subject, body) };
+  return {
+    subject,
+    html: layout(subject, body, {
+      brand: data.brand,
+      actionLabel: "View your warranty",
+      actionHref: ordersUrl(data.brand),
+    }),
+  };
 }

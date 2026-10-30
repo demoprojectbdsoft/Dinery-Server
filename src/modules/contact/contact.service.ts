@@ -28,7 +28,7 @@ export async function sendContactMessage(
 
   // The name and both addresses come from Site Settings, so the owner changes
   // them in the dashboard instead of in a deployment.
-  const { storeName, supportInbox, contactInbox } = await getMailIdentity();
+  const { storeName, supportInbox, contactInbox, brand } = await getMailIdentity();
 
   // "General & Business" goes to the contact address, everything else to
   // support. Both fall back to the other one when it has not been filled in.
@@ -49,6 +49,7 @@ export async function sendContactMessage(
 
   const { subject, html } = contactMessageEmail({
     storeName,
+    brand,
     name: data.name,
     email: data.email,
     department: data.department,

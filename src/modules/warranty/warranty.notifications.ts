@@ -74,6 +74,8 @@ async function loadContext(warranty: any) {
     orderNumber: (order as any)?.orderNumber as string | undefined,
     storeName: store.storeName,
     supportInbox: store.supportInbox,
+    // The palette, logo and shop address, so the mail looks like the store.
+    brand: store.brand,
   };
 }
 
@@ -88,6 +90,7 @@ export async function notifyClaimSubmitted(warranty: any, replyMessage?: string)
 
     const { subject, html } = claimSubmittedEmail({
       storeName: context.storeName,
+      brand: context.brand,
       customerName: context.customerName,
       customerEmail: context.customerEmail,
       productTitle: context.productTitle,
@@ -116,6 +119,7 @@ export async function notifyClaimUpdated(warranty: any) {
 
     const { subject, html } = claimUpdatedEmail({
       storeName: context.storeName,
+      brand: context.brand,
       customerName: context.customerName,
       productTitle: context.productTitle,
       orderNumber: context.orderNumber,
@@ -141,13 +145,14 @@ export async function notifyWarrantiesIssued(order: any, issued: IssuedWarranty[
       return;
     }
 
-    const { storeName } = await getMailIdentity();
+    const { storeName, brand } = await getMailIdentity();
 
     // One email per covered item, because each item carries its own terms and
     // expiry date.
     for (const item of issued) {
       const { subject, html } = warrantyIssuedEmail({
         storeName,
+        brand,
         customerName: user.name,
         productTitle: item.productTitle ?? undefined,
         orderNumber: order.orderNumber,
@@ -183,6 +188,7 @@ export async function notifyWarrantyExtended(
 
     const { subject, html } = warrantyExtendedEmail({
       storeName: context.storeName,
+      brand: context.brand,
       customerName: context.customerName,
       productTitle: context.productTitle,
       orderNumber: context.orderNumber,
@@ -213,6 +219,7 @@ export async function sendWarrantyMessage(
     if (!context.customerEmail) return { sent: false };
 
     const html = customMessageEmail({
+      brand: context.brand,
       customerName: context.customerName,
       message,
     });
