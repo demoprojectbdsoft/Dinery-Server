@@ -18,6 +18,10 @@ import {
   notifyWarrantiesIssued,
 } from "../warranty/warranty.notifications";
 import { recordActivity } from "../activity/activity.service";
+import {
+  notifyOrderPlaced,
+  notifyOrderStatusChanged,
+} from "../activity/activity.notifications";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -435,6 +439,11 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
     ref: orderRef,
   });
 
+  // The customer's own copy of the same event: one line in their feed and the
+  // confirmation email. Also post-commit, so a rolled-back order announces
+  // nothing.
+  await notifyOrderPlaced(order);
+
   return order;
 }
 
@@ -507,6 +516,8 @@ export async function updateOrderStatus(
   let issuedWarranties: IssuedWarranty[] = [];
   // The status before this change, needed by the feed outside the transaction.
   let previousStatus = "";
+  // Re-selecting the same stage is a no-op, and a no-op must not be announced.
+  let statusChanged = false;
 
   // The status write, the timeline entry and the settlement side effects must
   // not be left half-applied if one of them fails.
@@ -569,6 +580,7 @@ export async function updateOrderStatus(
 
     const updated = await Order.findByIdAndUpdate(id, data, { new: true, session });
     if (!updated) throw new ApiError(404, "Order not found");
+    statusChanged = true;
 
     await logOrderStatus(id, data.orderStatus, { session, changedBy });
 
@@ -608,6 +620,11 @@ export async function updateOrderStatus(
       detail: `Order ${shortOrderNumber(updated._id)} was delivered`,
       ref: updated._id.toString(),
     });
+  }
+
+  // The customer is told about every stage they can see, after the commit.
+  if (statusChanged) {
+    await notifyOrderStatusChanged(updated, data.orderStatus);
   }
 
   return updated;

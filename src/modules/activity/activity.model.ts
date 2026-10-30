@@ -1,13 +1,49 @@
 import { Schema, model } from "mongoose";
 
 /**
- * How long one activity line is kept. Notifications answer "what just
- * happened", so older lines delete themselves instead of piling up forever.
+ * How long one activity line is kept. Activities answer "what just happened",
+ * so older lines delete themselves instead of piling up forever.
  */
 export const ACTIVITY_TTL_DAYS = 30;
 
+/** Every line the store team's feed can hold. */
+export const STORE_ACTIVITY_TYPES = [
+  "order",
+  "transaction",
+  "user",
+  "user_deleted",
+  "order_cancelled",
+  "warranty",
+  "message",
+  "review",
+] as const;
+
 /**
- * One line in the admin notification feed.
+ * Every line a customer or rider can be told about. "order_cancelled" is shared
+ * with the store feed: one cancellation is one event, written for both sides.
+ */
+export const PERSONAL_ACTIVITY_TYPES = [
+  "order_placed",
+  "order_confirmed",
+  "order_processing",
+  "order_shipped",
+  "order_delivered",
+  "order_cancelled",
+  "delivery_assigned",
+  "delivery_update",
+  "delivery_declined",
+] as const;
+
+/** The two lists overlap on purpose, so the enum is built from the union. */
+const ALL_ACTIVITY_TYPES = [...new Set<string>([...STORE_ACTIVITY_TYPES, ...PERSONAL_ACTIVITY_TYPES])];
+
+/**
+ * One line in an activity feed.
+ *
+ * The same collection serves both feeds. A line with no `userId` belongs to the
+ * store team; a line with a `userId` belongs to that one person and carries
+ * their read state. One model means one history: nothing a customer is told can
+ * drift away from what the store sees.
  *
  * It stores what changed and the value the dashboard can search for, but never
  * the screen to open: the link is built in the app, so an old line still points
@@ -18,16 +54,7 @@ const activitySchema = new Schema(
     type: {
       type: String,
       required: true,
-      enum: [
-        "order",
-        "transaction",
-        "user",
-        "user_deleted",
-        "order_cancelled",
-        "warranty",
-        "message",
-        "review",
-      ],
+      enum: ALL_ACTIVITY_TYPES,
     },
     // For example: "New order #ORD-A1B2C3"
     title: { type: String, required: true },
@@ -36,6 +63,15 @@ const activitySchema = new Schema(
     // An order id, an email, a message address — whatever the list screen
     // knows how to search by.
     ref: { type: String, default: "" },
+
+    // ── Personal line ────────────────────────────────────────────────────────
+    // The one person this line is for. Empty means it belongs to the store feed.
+    userId: { type: Schema.Types.ObjectId, ref: "User", default: null, index: true },
+    // Which side of the app the line is written for.
+    role: { type: String, enum: ["customer", "rider", "admin"], default: null },
+    // When its owner opened it. Empty until they do.
+    readAt: { type: Date, default: null },
+
     // The TTL index removes the whole line once it is this many seconds old.
     createdAt: {
       type: Date,
@@ -45,5 +81,8 @@ const activitySchema = new Schema(
   },
   { versionKey: false }
 );
+
+// The bell asks "mine, unread first, newest first" on every poll.
+activitySchema.index({ userId: 1, readAt: 1, createdAt: -1 });
 
 export const Activity = model("Activity", activitySchema);

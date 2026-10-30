@@ -270,13 +270,21 @@ The contact page writes here; the admin reads it. Creating is not a public endpo
 | `POST` | `/messages/:id/reply` | Admin | Emails the visitor. Body: `subject`, `message`. The address is read from the stored message, never from the body |
 | `DELETE` | `/messages/:id` | Admin | |
 
-### Activity feed
+### Activity feed & notifications
 
-The admin notification bell reads this. Lines are written by the API itself the moment something happens — never seeded, mocked or back-filled — one row per new order, recorded payment, delivered order's warranties, customer cancellation, new or deleted account, contact message, and a review being written or edited. A row stores what changed plus the value the matching screen searches by (an order id, an account id, a review id or an email); the app builds the route, so an old line still opens the right page after a rename.
+One collection, two audiences. A line with no `userId` belongs to the store team's shared feed; a line with a `userId` is addressed to one customer or rider and carries its own read state. Keeping both in one place means what a customer is told and what the store sees can never drift apart.
+
+Store lines are written by the API itself the moment something happens — never seeded, mocked or back-filled — one row per new order, recorded payment, delivered order's warranties, customer cancellation, new or deleted account, contact message, and a review being written or edited. A row stores what changed plus the value the matching screen searches by (an order id, an account id, a review id or an email); the app builds the route, so an old line still opens the right page after a rename.
+
+Personal lines are written for the same events, from the customer's and rider's point of view: order placed, each order stage, a delivery request, and a delivery update. Each one is also emailed through the same SMTP mailer; a failed send is logged and swallowed, so a mail server problem can never undo an order or a delivery.
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `GET` | `/activities` | Admin | Newest first. Query: `limit` 1–30 (default 8). Answers `{ activities, serverTime }` — `serverTime` is the API clock at the moment of the answer, so the app can write "3m ago" without trusting the visitor's system clock. Rows delete themselves after 30 days |
+| `GET` | `/activities` | Admin | Store feed, newest first. Query: `limit` 1–30 (default 8). Answers `{ activities, serverTime }` — `serverTime` is the API clock at the moment of the answer, so the app can write "3m ago" without trusting the visitor's system clock. Rows delete themselves after 30 days |
+| `GET` | `/activities/mine` | Signed in | The caller's own lines, newest first. Query: `page`, `limit` 1–100 (default 20), `unread` (`true`). Answers `{ notifications, total, unreadCount, serverTime, pagination }`. The user id comes from the token, never from the query |
+| `GET` | `/activities/mine/unread-count` | Signed in | `{ unreadCount }`, for the bell |
+| `PATCH` | `/activities/mine/read-all` | Signed in | Marks every unread line of the caller as read. `{ updated }` |
+| `PATCH` | `/activities/mine/:id/read` | Signed in | Marks one line as read; `404` when the id is not the caller's |
 
 ### Mail (internal)
 
@@ -774,9 +782,10 @@ The `rider` role and the delivery domain are being added in seven phases, withou
 - **Roles** — `admin`, `customer`, `rider`, `vendor`. `PATCH /api/users/:id` accepts the new roles; `requireAuth` re-reads the role from the database after a JWT check so a promotion or demotion applies on the next request.
 - **No shopping** — `assertShopper` refuses cart, wishlist and review writes for admin, demo admin, rider and vendor accounts.
 - **Ownership** — every rider endpoint will scope the query to the caller's token, never a body-supplied rider id.
+- **Notifications** — the same `activities` collection carries the store feed and each person's own lines; `GET /activities/mine` reads only the caller's, and the order service writes the customer copy next to every stage change.
 - **Tracking transport** — the API stores only the latest rider position per delivery; the customer page polls it every 8 seconds (Vercel serverless friendly), and optional Ably keys publish the same message for instant updates.
 
-**Progress:** Phase 1 ✅ roles, RBAC and no-shopping rules. Delivery models, assignment, lifecycle, tracking and OTP follow in Phases 2–7.
+**Progress:** Phase 1 ✅ roles, RBAC and no-shopping rules. Notifications ✅ in-app + email for customers and riders. Delivery models, assignment, lifecycle, tracking and OTP follow in Phases 2–7.
 
 ---
 
@@ -796,6 +805,7 @@ The `rider` role and the delivery domain are being added in seven phases, withou
 | Store settings, branding, About page copy & opening hours | ✅ Complete |
 | Demo admin sandbox with daily restore | ✅ Complete |
 | Rider role, immediate role refresh and no-shopping guards | 🚧 Phase 1 of 7 |
+| Customer & rider notifications — in-app feed and transactional email | ✅ Complete |
 | Account data export | ✅ Complete |
 | Rate limiting, CORS allow-list, database indexes | ⏳ Planned |
 | Automated tests | ⏳ Planned |

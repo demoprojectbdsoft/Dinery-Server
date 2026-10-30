@@ -460,3 +460,54 @@ export function passwordResetEmail(data: PasswordResetMailInput) {
     }),
   };
 }
+
+/* ── 9. Order and delivery updates, for the customer and the rider ── */
+
+export interface DeliveryUpdateMailInput {
+  brand?: MailBrand;
+  recipientName?: string;
+  /** The headline, for example "Your order is on the way". */
+  heading: string;
+  intro?: string;
+  orderNumber?: string;
+  rows?: { label: string; value?: string | number | null }[];
+  /** A short paragraph, such as a decline or cancellation reason. */
+  note?: string;
+  actionLabel?: string;
+  actionHref?: string;
+}
+
+/**
+ * One template for every order and delivery event.
+ *
+ * The events differ in wording, not in shape — heading, a few labelled facts,
+ * an optional note and one button — so a single frame keeps them consistent
+ * and stops a new event from needing a new template.
+ */
+export function deliveryUpdateEmail(data: DeliveryUpdateMailInput) {
+  const storeName = data.brand?.storeName || DEFAULT_BRAND.storeName;
+  const subject = data.orderNumber
+    ? `${data.heading} · ${data.orderNumber}`
+    : `${data.heading} · ${storeName}`;
+
+  const greeting = data.recipientName
+    ? `<p style="margin:0 0 14px">Hello ${esc(data.recipientName)},</p>`
+    : "";
+  const intro = data.intro ? `<p style="margin:0 0 14px">${esc(data.intro)}</p>` : "";
+  const rows = (data.rows || []).map((item) => row(item.label, item.value)).join("");
+  const note = data.note
+    ? `<p style="margin:14px 0 0;padding:12px 14px;border-left:3px solid ${esc(
+        (data.brand || DEFAULT_BRAND).primary
+      )};background:#f8fafc;border-radius:4px">${esc(data.note)}</p>`
+    : "";
+
+  return {
+    subject,
+    html: layout(data.heading, `${greeting}${intro}${rows}${note}`, {
+      brand: data.brand,
+      actionLabel: data.actionLabel,
+      actionHref: data.actionHref,
+    }),
+  };
+}
+
