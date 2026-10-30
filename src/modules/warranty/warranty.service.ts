@@ -8,6 +8,7 @@ import {
   AdminUpdateClaimInput,
   GetWarrantiesQuery,
 } from "./warranty.validator";
+import { IssuedWarranty, notifyClaimSubmitted, notifyClaimUpdated } from "./warranty.notifications";
 
 /**
  * Statuses that still have a claim an admin may move forward. `active` has no
@@ -53,8 +54,10 @@ export async function createWarrantiesForOrder(
   userId: string,
   items: { productId: any; quantity?: number }[],
   session?: ClientSession
-): Promise<number> {
-  let created = 0;
+): Promise<IssuedWarranty[]> {
+  // The summaries go back to the caller so the confirmation email can be sent
+  // after the order has actually been committed.
+  const created: IssuedWarranty[] = [];
   for (const item of items || []) {
     const productId = refIdString(item?.productId);
     if (!productId) continue;
@@ -89,7 +92,13 @@ export async function createWarrantiesForOrder(
       warrantyTerms: product.warrantyTerms,
     });
     await warranty.save({ session });
-    created++;
+    created.push({
+      productTitle: product.title,
+      warrantyType: product.warrantyType,
+      warrantyPeriodMonths: months,
+      warrantyTerms: product.warrantyTerms,
+      expiryDate,
+    });
   }
   return created;
 }
@@ -230,6 +239,10 @@ export async function submitClaim(
 
   await warranty.save();
 
+  // Sent after the write, and it never throws, so a mail problem can never undo
+  // a claim the customer just filed.
+  await notifyClaimSubmitted(warranty, isReply ? data.description : undefined);
+
   return formatWarranty(warranty);
 }
 
@@ -293,6 +306,10 @@ export async function adminUpdateClaim(
   if (note) warranty.claimAdminNote = note;
 
   await warranty.save();
+
+  // The customer learns the decision by email as well as in the dashboard.
+  await notifyClaimUpdated(warranty);
+
   return formatWarranty(warranty);
 }
 

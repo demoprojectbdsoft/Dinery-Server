@@ -13,6 +13,10 @@ import { logOrderStatus } from "../order-status/order-status.service";
 import { createTransaction, getLatestTransactionForOrder } from "../transaction/transaction.service";
 import { getSiteSettings } from "../site-settings/site-settings.service";
 import { createWarrantiesForOrder, voidWarrantiesForOrder } from "../warranty/warranty.service";
+import {
+  IssuedWarranty,
+  notifyWarrantiesIssued,
+} from "../warranty/warranty.notifications";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -207,14 +211,14 @@ async function applyDelivery(
   orderId: string,
   previousStatus: string,
   session?: ClientSession
-) {
+): Promise<IssuedWarranty[]> {
   await Transaction.updateMany(
     { orderId, status: { $ne: "success" } },
     { $set: { status: "success" } },
     { session }
   );
 
-  if (previousStatus === "delivered") return;
+  if (previousStatus === "delivered") return [];
 
   for (const item of order.items || []) {
     const productId = orderItemProductId(item);
@@ -238,8 +242,9 @@ async function applyDelivery(
   }
 
   // Idempotent — one warranty per (user, product, order). A failure here rolls
-  // the delivery back, so retrying it cannot settle the order twice.
-  await createWarrantiesForOrder(orderId, order.userId.toString(), order.items || [], session);
+  // the delivery back, so retrying it cannot settle the order twice. The
+  // summaries are returned so the confirmation email can go out after commit.
+  return createWarrantiesForOrder(orderId, order.userId.toString(), order.items || [], session);
 }
 
 /**
@@ -413,9 +418,14 @@ export async function updateOrderStatus(
   data: UpdateOrderStatusInput,
   changedBy?: string
 ) {
+  // Warranty confirmations are collected inside the transaction but only sent
+  // after it commits, so a rolled-back delivery never announces coverage that
+  // does not exist.
+  let issuedWarranties: IssuedWarranty[] = [];
+
   // The status write, the timeline entry and the settlement side effects must
   // not be left half-applied if one of them fails.
-  return withTransaction(async (session) => {
+  const updated = await withTransaction(async (session) => {
     // Reads need the explicit session, otherwise they may see data from
     // before the transaction started. Writes just take a `{ session }` option,
     // which is harmless when there is no session.
@@ -483,11 +493,17 @@ export async function updateOrderStatus(
     }
 
     if (data.orderStatus === "delivered") {
-      await applyDelivery(updated, id, order.orderStatus, session);
+      issuedWarranties = await applyDelivery(updated, id, order.orderStatus, session);
     }
 
     return updated;
   });
+
+  if (issuedWarranties.length) {
+    await notifyWarrantiesIssued(updated, issuedWarranties);
+  }
+
+  return updated;
 }
 
 // ─── Customer Order Response ───────────────────────────────────────────────────
