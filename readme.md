@@ -245,9 +245,9 @@ Every route requires a token; the owner is always taken from the token, never fr
 |---|---|---|---|
 | `GET` | `/warranties/mine` | Bearer | The caller's coverage records |
 | `GET` | `/warranties/order/:orderId/product/:productId` | Bearer | Coverage for one order line |
-| `POST` | `/warranties/claim/:id` | Bearer | Files a claim, or answers when the store asked for info. Body: `reason`, `description`, up to 5 `images`; `problem` is optional and legacy |
-| `GET` | `/warranties` | Admin | All warranties, filterable by `status` and by `warrantyType`. Besides the six real statuses, `status=claimed` is a group that returns `claim_submitted`, `under_review`, `info_requested` and `resolved` — every record a customer filed a claim on. Untouched (`active`) and closed-by-date (`expired`) records stay out of it. `warrantyType` matches the type copied onto the record when it was issued (`manufacturer-warranty`, `seller-warranty`, `extended-warranty`, `other`, `none`), so it narrows the list to one kind of cover and combines with `status` |
-| `PATCH` | `/warranties/claim/:id` | Admin | `mark_under_review`, `request_info` (note required), `resolve` / `reject` (resolution or note required) |
+| `POST` | `/warranties/claim/:id` | Bearer | Files a claim on an active record. Body: `reason`, `description`, up to 5 `images`; `problem` is optional and legacy |
+| `GET` | `/warranties` | Admin | All warranties, filterable by `status` and by `warrantyType`. Besides the five real statuses, `status=claimed` is a group that returns `claim_submitted`, `under_review` and `resolved` — every record a customer filed a claim on. Untouched (`active`) and closed-by-date (`expired`) records stay out of it. `warrantyType` matches the type copied onto the record when it was issued (`manufacturer-warranty`, `seller-warranty`, `extended-warranty`, `other`, `none`), so it narrows the list to one kind of cover and combines with `status` |
+| `PATCH` | `/warranties/claim/:id` | Admin | `mark_under_review`, `resolve` / `reject` (resolution or note required) |
 | `POST` | `/warranties/email/:id` | Admin | Emails the customer about this warranty. The address is read from the record, never from the body |
 | `GET` | `/warranties/expire` | Cron | Closes lapsed warranties. Called by Vercel Cron once a day |
 
@@ -409,9 +409,7 @@ The claim pipeline is identical for the four covering types; the type changes wh
 | From | Who | Action | Becomes |
 |---|---|---|---|
 | `active` | customer | files a claim | `claim_submitted` |
-| `claim_submitted` · `under_review` · `info_requested` | admin | `mark_under_review` | `under_review` |
-| `claim_submitted` · `under_review` · `info_requested` | admin | `request_info` — a note is required | `info_requested` |
-| `info_requested` | customer | sends a reply | `claim_submitted` |
+| `claim_submitted` · `under_review` | admin | `mark_under_review` | `under_review` |
 | any open claim | admin | `resolve` — resolution or note required | `resolved` |
 | any open claim | admin | `reject` — resolution or note required | `expired` |
 | `active` | system | expiry date has passed | `expired` (`closedReason: date`) |
@@ -444,17 +442,16 @@ An `expired` record also stores **why** it closed, because the same status cover
 
 1. After delivery, each covered line on the order page shows its warranty with the type, duration and expiry date.
 2. On an `active` warranty the **Claim** form asks for a reason, a description and up to 5 photos. (The old `problem` dropdown was removed from the form; the API still accepts the legacy codes.)
-3. Sending it turns the record into `claim_submitted` and emails the store inbox.
-4. When the store asks for more information the badge reads *Info Requested* and the same form becomes **Your Reply**: the reason is pre-filled, the box starts empty, and the reply is appended to `claimReplies` while the first description and photos stay untouched.
-5. `resolved` shows the outcome the admin wrote; `expired` explains that the warranty or the claim is closed.
+3. Sending it turns the record into `claim_submitted` and emails the store inbox. A record that already holds a claim accepts no second one.
+4. `resolved` shows the outcome the admin wrote; `expired` explains that the warranty or the claim is closed.
 
 #### 5. What the admin does
 
-1. *Dashboard → Warranties* opens on the claimed records (`status=claimed`), because a warranty nobody claimed needs no admin work; the status select, the warranty-type filter and the All view are one click away. Clicking a row opens one dialog with the coverage, the claim text, the photos and the customer's replies. The **Extend** section only appears on an Extended warranty that can still take another extension.
-2. The admin fills an **Internal Admin Note** and **Resolution Details**, then picks one of four actions: mark under review, ask for more info, resolve, or reject.
+1. *Dashboard → Warranties* opens on the claimed records (`status=claimed`), because a warranty nobody claimed needs no admin work; the status select, the warranty-type filter and the All view are one click away. Clicking a row opens one dialog with the coverage, the claim text and the photos. The **Extend** section only appears on an Extended warranty that can still take another extension.
+2. The admin fills an **Internal Admin Note** and **Resolution Details**, then picks one of three actions: mark under review, resolve, or reject.
 3. **Extend** adds months to the coverage of an **Extended warranty** with a required reason, up to three times, and the dialog lists every extension already granted with an `n of 3 used` counter. Other warranty types show no extend section at all.
 4. The buttons lock while a request is in flight, and the API enforces the same rules a second time, so two decisions can never race each other.
-5. **Email Customer** opens a composer that is already filled in from the claim — name, product, order number, reason, description, latest reply and coverage — and sends it to the address stored on the record.
+5. **Email Customer** opens a composer that is already filled in from the claim — name, product, order number, reason, description and coverage — and sends it to the address stored on the record.
 
 #### 6. Emails
 
@@ -491,7 +488,6 @@ Contact messages are the one exception to the "send after the write" rule: `POST
 | Trigger | Recipient | Reply-to |
 |---|---|---|
 | Customer files a claim | the store inbox — `supportEmail` in Site Settings | the customer |
-| Customer replies to `info_requested` | the store inbox — `supportEmail` in Site Settings | the customer |
 | Admin moves a claim | the customer | — |
 | Order delivered and coverage issued | the customer, one email per item | — |
 | Admin extends the warranty | the customer, with the old and new expiry date | — |
@@ -509,10 +505,10 @@ Warranty emails are **best effort**: a missing key or a rejected send is logged 
 
 #### 8. Guards worth knowing
 
-- A claim is refused when the record is not `active` (or `info_requested` for a reply), when it has expired, or when it belongs to somebody else.
+- A claim is refused when the record is not `active`, when it has expired, or when it belongs to somebody else.
 - `reason` and `description` are trimmed, so a message made only of spaces is rejected instead of being stored blank.
-- At most 5 images per claim; a reply that adds photos to a full set keeps the newest five.
-- `request_info` without a note, and `resolve` / `reject` without any resolution or note, are refused — the customer must never see an unexplained status.
+- At most 5 images per claim.
+- `resolve` / `reject` without any resolution or note is refused — the customer must never see an unexplained status.
 - An empty admin note never overwrites the previous one.
 - Cancelling or returning a delivered order moves every open record of that order to `expired` (`closedReason: void`). Claiming and extending also re-check the order itself, so even a record closed for another reason (a rejected claim, say) cannot be revived after the goods went back.
 

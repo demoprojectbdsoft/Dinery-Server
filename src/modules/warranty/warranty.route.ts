@@ -10,7 +10,7 @@ const router = Router();
 router.get("/mine", requireAuth, warrantyController.getMyWarranties);
 // Customer: fetch the warranty record for one order item (used by the order history "Claim" button)
 router.get("/order/:orderId/product/:productId", requireAuth, warrantyController.getWarrantyForOrderItem);
-// Customer: submit a claim, or reply when the store asked for more information
+// Customer: submit a claim for one of their own active warranties
 router.post("/claim/:id", requireAuth, warrantyController.submitClaim);
 
 // Scheduled: close lapsed warranties. Called by Vercel Cron, and callable by

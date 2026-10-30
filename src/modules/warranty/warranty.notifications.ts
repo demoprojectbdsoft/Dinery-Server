@@ -20,7 +20,7 @@ import { describeWarrantyType } from "./warranty.types";
  * truth and the email is best effort.
  *
  * Who receives what:
- *   claim filed / replied -> the store inbox (supportEmail in Site Settings), reply-to the customer
+ *   claim filed           -> the store inbox (supportEmail in Site Settings), reply-to the customer
  *   claim moved by admin  -> the customer
  *   warranty created      -> the customer, one email per covered item
  *   warranty extended     -> the customer, with the old and new expiry date
@@ -30,7 +30,6 @@ import { describeWarrantyType } from "./warranty.types";
 const STATUS_LABELS: Record<string, string> = {
   claim_submitted: "Submitted",
   under_review: "Under review",
-  info_requested: "More information needed",
   resolved: "Resolved",
   expired: "Closed",
 };
@@ -79,8 +78,8 @@ async function loadContext(warranty: any) {
   };
 }
 
-/** Tells the store inbox that a claim was filed, or answered. */
-export async function notifyClaimSubmitted(warranty: any, replyMessage?: string) {
+/** Tells the store inbox that a claim was filed. */
+export async function notifyClaimSubmitted(warranty: any) {
   try {
     const context = await loadContext(warranty);
     if (!context.supportInbox) {
@@ -96,9 +95,8 @@ export async function notifyClaimSubmitted(warranty: any, replyMessage?: string)
       productTitle: context.productTitle,
       orderNumber: context.orderNumber,
       reason: warranty.claimReason || "",
-      description: replyMessage || warranty.claimDescription || "",
+      description: warranty.claimDescription || "",
       images: warranty.claimImages || [],
-      isReply: Boolean(replyMessage),
     });
 
     // Reply-to the customer, so the admin can answer from the inbox directly.

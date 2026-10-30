@@ -155,13 +155,10 @@ export interface ClaimSubmittedMailInput {
   reason: string;
   description: string;
   images?: string[];
-  isReply?: boolean;
 }
 
 export function claimSubmittedEmail(data: ClaimSubmittedMailInput) {
-  const heading = data.isReply
-    ? `New reply on a warranty claim — ${data.storeName}`
-    : `New warranty claim — ${data.storeName}`;
+  const heading = `New warranty claim — ${data.storeName}`;
 
   const images = (data.images || [])
     .map(
@@ -173,11 +170,7 @@ export function claimSubmittedEmail(data: ClaimSubmittedMailInput) {
     .join("");
 
   const body = `
-    <p style="margin:0 0 14px">${
-      data.isReply
-        ? "The customer answered your request for more information."
-        : "A customer submitted a warranty claim."
-    }</p>
+    <p style="margin:0 0 14px">A customer submitted a warranty claim.</p>
     ${row("Customer", data.customerName || "Customer")}
     ${row("Email", data.customerEmail || "—")}
     ${row("Order", data.orderNumber)}
@@ -188,7 +181,7 @@ export function claimSubmittedEmail(data: ClaimSubmittedMailInput) {
       data.description
     )}</p>
     ${images ? `<p style="margin:0 0 6px"><strong>Photos</strong></p><ul style="margin:0 0 14px">${images}</ul>` : ""}
-    <p style="margin:0">Open the admin dashboard to review, ask for more information, or resolve the claim.</p>`;
+    <p style="margin:0">Open the admin dashboard to review or resolve the claim.</p>`;
 
   return {
     subject: heading,

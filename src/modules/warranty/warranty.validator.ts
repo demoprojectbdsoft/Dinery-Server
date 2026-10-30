@@ -39,7 +39,7 @@ export const submitWarrantyClaimSchema = z.object({
  * Admin actions on a claim.
  */
 export const adminUpdateClaimSchema = z.object({
-  action: z.enum(["mark_under_review", "request_info", "resolve", "reject"]),
+  action: z.enum(["mark_under_review", "resolve", "reject"]),
   adminNote: z.string().max(2000).optional(),
   resolution: z.string().max(2000).optional(),
 });

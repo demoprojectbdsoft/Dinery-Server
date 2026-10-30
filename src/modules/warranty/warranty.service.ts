@@ -31,7 +31,7 @@ import {
  * Statuses that still have a claim an admin may move forward. `active` has no
  * claim yet, and `resolved` / `expired` are closed for good.
  */
-const OPEN_CLAIM_STATUSES = ["claim_submitted", "under_review", "info_requested"];
+const OPEN_CLAIM_STATUSES = ["claim_submitted", "under_review"];
 
 /**
  * Every status a record only reaches after a customer filed a claim. `active`
@@ -179,7 +179,7 @@ export async function voidWarrantiesForOrder(
   const result = await Warranty.updateMany(
     {
       orderId,
-      status: { $in: ["active", "claim_submitted", "under_review", "info_requested"] },
+      status: { $in: ["active", "claim_submitted", "under_review"] },
     },
     // "void" is its own reason: these goods went back, so no extension can
     // ever bring the coverage back to life.
@@ -279,11 +279,9 @@ export async function submitClaim(
       "This warranty was closed because the order was cancelled or returned"
     );
   }
-  // An active record takes the first claim. Once the admin asks for more
-  // information the customer is allowed to answer, which keeps the claim open
-  // instead of leaving it stuck with no way to reply.
-  const isReply = warranty.status === "info_requested";
-  if (warranty.status !== "active" && !isReply) {
+  // Only an untouched record takes a claim. Anything already claimed stays
+  // closed to further submissions, so one order line never holds two claims.
+  if (warranty.status !== "active") {
     throw new ApiError(400, "This warranty is no longer active");
   }
   if (warranty.expiryDate && warranty.expiryDate < new Date()) {
@@ -296,27 +294,14 @@ export async function submitClaim(
   if (data.problem) warranty.claimProblem = data.problem;
   warranty.claimReason = data.reason;
 
-  if (isReply) {
-    // Keep the first description untouched and add the answer to the thread, so
-    // the admin can read both the question's context and the new details.
-    warranty.claimReplies.push({
-      message: data.description,
-      createdAt: new Date(),
-    });
-    const mergedImages = [...(warranty.claimImages || []), ...(data.images || [])];
-    // Keep the newest five. A reply that adds photos after a full set must not
-    // lose the pictures it just sent.
-    warranty.claimImages = mergedImages.slice(-5);
-  } else {
-    warranty.claimDescription = data.description;
-    warranty.claimImages = data.images || [];
-  }
+  warranty.claimDescription = data.description;
+  warranty.claimImages = data.images || [];
 
   await warranty.save();
 
   // Sent after the write, and it never throws, so a mail problem can never undo
   // a claim the customer just filed.
-  await notifyClaimSubmitted(warranty, isReply ? data.description : undefined);
+  await notifyClaimSubmitted(warranty);
 
   return formatWarranty(warranty);
 }
@@ -324,7 +309,6 @@ export async function submitClaim(
 /**
  * Admin actions on a claim.
  *   mark_under_review -> status = under_review
- *   request_info      -> status = info_requested, admin note recorded
  *   resolve           -> status = resolved, resolution recorded
  *   reject            -> status = expired (claim rejected, warranty consumed)
  */
@@ -351,9 +335,6 @@ export async function adminUpdateClaim(
   const note = data.adminNote?.trim();
   const resolution = data.resolution?.trim();
 
-  if (data.action === "request_info" && !note) {
-    throw new ApiError(400, "Add a note so the customer knows what information is needed");
-  }
   if ((data.action === "resolve" || data.action === "reject") && !resolution && !note) {
     throw new ApiError(400, "Provide resolution details or an admin note");
   }
@@ -361,9 +342,6 @@ export async function adminUpdateClaim(
   switch (data.action) {
     case "mark_under_review":
       warranty.status = "under_review";
-      break;
-    case "request_info":
-      warranty.status = "info_requested";
       break;
     case "resolve":
       warranty.status = "resolved";
@@ -550,12 +528,6 @@ function formatWarranty(w: any) {
     claimReason: w.claimReason,
     claimDescription: w.claimDescription,
     claimImages: Array.isArray(w.claimImages) ? w.claimImages : [],
-    claimReplies: Array.isArray(w.claimReplies)
-      ? w.claimReplies.map((reply: any) => ({
-          message: reply.message,
-          createdAt: reply.createdAt,
-        }))
-      : [],
     claimAdminNote: w.claimAdminNote,
     resolutionDetails: w.resolutionDetails,
   });
