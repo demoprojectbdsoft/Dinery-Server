@@ -35,6 +35,11 @@ export async function markFailed(id: unknown, reason: string): Promise<void> {
   await Message.updateOne({ _id: id }, { status: "failed", error: reason });
 }
 
+/** Escapes regex special characters so the admin's search text matches literally. */
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** The admin list: filter by delivery status and by a name or address. */
 export async function getMessages(query: GetMessagesQuery) {
   const { status, search, page, limit } = query;
@@ -42,7 +47,8 @@ export async function getMessages(query: GetMessagesQuery) {
   const filter: Record<string, any> = {};
   if (status && status !== "all") filter.status = status;
   if (search?.trim()) {
-    const pattern = new RegExp(search.trim(), "i");
+    // A typed "(" would otherwise be read as a pattern and throw.
+    const pattern = new RegExp(escapeRegex(search.trim()), "i");
     filter.$or = [{ name: pattern }, { email: pattern }, { subject: pattern }];
   }
 
