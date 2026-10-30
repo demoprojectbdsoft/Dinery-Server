@@ -215,7 +215,7 @@ Both routers apply `requireAuth` to every route. The `:userId` path variants are
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `GET` | `/reviews` | Public | Filter by product, user or rating |
+| `GET` | `/reviews` | Public | Filter by product, user or rating, or search the comment, reviewer name and product title; a 24-character review id finds exactly one review (the bell's review line links that way) |
 | `POST` | `/reviews` | Bearer | Requires a delivered purchase |
 | `PATCH` | `/reviews/:id` | Bearer | Reviewer only |
 | `DELETE` | `/reviews/:id` | Bearer | Reviewer or admin |
@@ -272,7 +272,7 @@ The contact page writes here; the admin reads it. Creating is not a public endpo
 
 ### Activity feed
 
-The admin notification bell reads this. Lines are written by the API itself the moment something happens — never seeded, mocked or back-filled — one row per new order, recorded payment, delivered order's warranties, customer cancellation, new or deleted account, and contact message. A row stores what changed plus the value the matching screen searches by (an order id, an account id or an email); the app builds the route, so an old line still opens the right page after a rename.
+The admin notification bell reads this. Lines are written by the API itself the moment something happens — never seeded, mocked or back-filled — one row per new order, recorded payment, delivered order's warranties, customer cancellation, new or deleted account, contact message, and a review being written or edited. A row stores what changed plus the value the matching screen searches by (an order id, an account id, a review id or an email); the app builds the route, so an old line still opens the right page after a rename.
 
 | Method | Path | Access | Notes |
 |---|---|---|---|

@@ -8,6 +8,12 @@ import { ApiError } from "../../utils/apiError";
 import { assertOwnerOrAdmin } from "../../utils/authz";
 import { idQuery } from "../../utils/ids";
 import { isAdminRole } from "../../utils/roles";
+import { recordActivity } from "../activity/activity.service";
+
+/** "4/5 · Wireless Headphones" — the second line of a review notification. */
+function reviewSummary(rating: number | undefined, productTitle?: string): string {
+  return [rating ? `${rating}/5` : "", productTitle || ""].filter(Boolean).join(" · ");
+}
 
 /** Sort options exposed by the reviews list. */
 function sortStageFor(sort?: string) {
@@ -84,15 +90,30 @@ export async function getReviews(query: GetReviewsQuery) {
 
   // If search is provided we need to join users/products to search across names/titles
   if (search && search.trim()) {
-    const searchRegex = new RegExp(search.trim(), "i");
+    const term = search.trim();
+    const searchRegex = new RegExp(term, "i");
+
+    // A notification links to one review by its id, so an id finds itself.
+    const searchOr: any[] = [
+      { comment: searchRegex },
+      { "userDoc.name": searchRegex },
+      { "productDoc.title": searchRegex },
+    ];
+    if (/^[0-9a-fA-F]{24}$/.test(term)) searchOr.push({ _id: new Types.ObjectId(term) });
 
     // Use aggregation to join user and product, then filter by search term
     const pipeline: any[] = [
       { $match: filter },
       {
         $lookup: {
-          from: "users",
-          let: { uid: { $toObjectId: "$userId" } },
+          // Accounts live in the singular "user" collection that better-auth
+          // and the User model share; joining "users" silently found nobody.
+          from: "user",
+          // $convert instead of $toObjectId: an old row that already stores an
+          // ObjectId must not make every search throw.
+          let: {
+            uid: { $convert: { input: "$userId", to: "objectId", onError: null, onNull: null } },
+          },
           pipeline: [{ $match: { $expr: { $eq: ["$_id", "$$uid"] } } }, { $project: { name: 1, email: 1, image: 1 } }],
           as: "userDoc",
         },
@@ -101,7 +122,9 @@ export async function getReviews(query: GetReviewsQuery) {
       {
         $lookup: {
           from: "products",
-          let: { pid: { $toObjectId: "$productId" } },
+          let: {
+            pid: { $convert: { input: "$productId", to: "objectId", onError: null, onNull: null } },
+          },
           pipeline: [{ $match: { $expr: { $eq: ["$_id", "$$pid"] } } }, { $project: { title: 1, slug: 1, image: 1, price: 1 } }],
           as: "productDoc",
         },
@@ -109,11 +132,7 @@ export async function getReviews(query: GetReviewsQuery) {
       { $unwind: { path: "$productDoc", preserveNullAndEmptyArrays: true } },
       {
         $match: {
-          $or: [
-            { comment: searchRegex },
-            { "userDoc.name": searchRegex },
-            { "productDoc.title": searchRegex },
-          ],
+          $or: searchOr,
         },
       },
     ];
@@ -192,6 +211,15 @@ export async function createReview(data: CreateReviewInput, userId: string) {
     User.findById(userId).lean(),
     Product.findById(data.productId).lean(),
   ]);
+
+  // The store team answers reviews, so a new one is their work queue growing.
+  await recordActivity({
+    type: "review",
+    title: `New review from ${user?.name || "a customer"}`,
+    detail: reviewSummary(review.rating, product?.title),
+    ref: review._id.toString(),
+  });
+
   return formatReview(
     { ...review.toObject(), createdAt: (review as any).createdAt },
     user,
@@ -222,6 +250,14 @@ export async function updateReview(
     .populate("userId", "name email image")
     .populate("productId", "title slug image price");
   if (!updated) throw new ApiError(404, "Review not found");
+
+  // An edit changes what the store is being told, so the feed shows it too.
+  await recordActivity({
+    type: "review",
+    title: `${(updated as any).userId?.name || "A customer"} updated a review`,
+    detail: reviewSummary(updated.rating, (updated as any).productId?.title),
+    ref: updated._id.toString(),
+  });
 
   return formatReview(updated, (updated as any).userId, (updated as any).productId);
 }

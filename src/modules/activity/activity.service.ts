@@ -7,7 +7,8 @@ export type ActivityType =
   | "user_deleted"
   | "order_cancelled"
   | "warranty"
-  | "message";
+  | "message"
+  | "review";
 
 export interface NewActivity {
   type: ActivityType;

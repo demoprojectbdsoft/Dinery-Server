@@ -26,6 +26,7 @@ const activitySchema = new Schema(
         "order_cancelled",
         "warranty",
         "message",
+        "review",
       ],
     },
     // For example: "New order #ORD-A1B2C3"
