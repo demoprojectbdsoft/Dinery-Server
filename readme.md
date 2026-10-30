@@ -236,7 +236,7 @@ Both routers apply `requireAuth` to every route. The `:userId` path variants are
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `POST` | `/contact` | Public | Contact-page message. Body: `name`, `email`, `message` (10–3000 characters), optional `subject` and `department` (`support` or `contact`). Emailed to `CONTACT_INBOX`, or `STORE_INBOX` when that is not set |
+| `POST` | `/contact` | Public | Contact-page message. Body: `name`, `email`, `message` (10–3000 characters), optional `subject` and `department` (`support` or `contact`). Emailed to the address saved in Site Settings — `contactEmail` for General & Business, `supportEmail` otherwise |
 
 ### Store settings & demo jobs
 
@@ -405,12 +405,12 @@ The type is a label on the record plus free-text `warrantyTerms`. **The claim pi
 
 #### 6. Emails
 
-Every message is sent **after** the database write, through Resend's HTTPS API with an 8 second timeout.
+Every message is sent **after** the database write, through Resend's HTTPS API with an 8 second timeout. The sender comes from `MAIL_FROM`; the store name and both recipient addresses are read from **Site Settings** (`siteName`, `supportEmail`, `contactEmail`), so the owner changes them in the dashboard instead of in a deployment.
 
 | Trigger | Recipient | Reply-to |
 |---|---|---|
-| Customer files a claim | `STORE_INBOX` | the customer |
-| Customer replies to `info_requested` | `STORE_INBOX` | the customer |
+| Customer files a claim | the store inbox — `supportEmail` in Site Settings | the customer |
+| Customer replies to `info_requested` | the store inbox — `supportEmail` in Site Settings | the customer |
 | Admin moves a claim | the customer | — |
 | Order delivered and coverage issued | the customer, one email per item | — |
 | Admin uses **Email Customer** | the customer | — |
@@ -569,9 +569,9 @@ To check end to end: sign in as the demo admin, add a category and edit a produc
 | `CRON_TIMEZONE` | No | Timezone for the local jobs. Default `Asia/Dhaka`. |
 | `RESEND_API_KEY` | For email | Resend API key. Without it nothing is sent: warranty emails are skipped and logged, and the contact form answers `503`. |
 | `MAIL_FROM` | For email | Verified sender, e.g. `Sparq <orders@yourdomain.com>`. Resend rejects a domain that is not verified. |
-| `STORE_INBOX` | For email | Where claim and reply notifications are delivered. |
-| `CONTACT_INBOX` | No | Separate inbox for the contact page. Falls back to `STORE_INBOX`. |
-| `STORE_NAME` | No | Name used in email subjects and bodies. Default `Sparq`. |
+| `STORE_INBOX` | No | Optional override. Claim notifications go to `supportEmail` from Site Settings; this is used only when that field is empty. |
+| `CONTACT_INBOX` | No | Optional override. The contact page writes to `contactEmail` from Site Settings, falling back to `supportEmail`. |
+| `STORE_NAME` | No | Optional override. The name in email subjects and bodies comes from `siteName` in Site Settings. |
 
 ```env
 PORT=5000
@@ -581,10 +581,12 @@ CRON_SECRET=your_long_random_string
 DEMO_ADMIN_EMAIL=admin@gmail.com
 CRON_TIMEZONE=Asia/Dhaka
 RESEND_API_KEY=re_your_key
-MAIL_FROM=Sparq <orders@yourdomain.com>
-STORE_INBOX=hello@yourdomain.com
-CONTACT_INBOX=contact@yourdomain.com
-STORE_NAME=Sparq
+MAIL_FROM="Sparq <orders@yourdomain.com>"
+
+# Optional: used only when the matching Site Settings field is empty.
+# STORE_INBOX=
+# CONTACT_INBOX=
+# STORE_NAME=
 ```
 
 > ⚠️ Never commit `.env` or `.env.local`. A `CRON_SECRET` leak lets whoever holds it trigger a demo restore.

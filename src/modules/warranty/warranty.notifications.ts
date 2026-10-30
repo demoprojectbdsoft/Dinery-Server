@@ -1,6 +1,7 @@
 import { User } from "../user/user.model";
 import { Product } from "../product/product.model";
 import { Order } from "../order/order.model";
+import { getMailIdentity } from "../site-settings/site-settings.service";
 import { sendMail } from "../../utils/mailer";
 import {
   claimSubmittedEmail,
@@ -17,12 +18,10 @@ import {
  * truth and the email is best effort.
  *
  * Who receives what:
- *   claim filed / replied -> the store inbox (STORE_INBOX), reply-to the customer
+ *   claim filed / replied -> the store inbox (supportEmail in Site Settings), reply-to the customer
  *   claim moved by admin  -> the customer
  *   warranty created      -> the customer, one email per covered item
  */
-
-const STORE_NAME = process.env.STORE_NAME || "Sparq";
 
 /** Human wording for the warranty type codes stored on a product. */
 const TYPE_LABELS: Record<string, string> = {
@@ -66,10 +65,12 @@ function formatDate(value?: Date | string): string {
 
 /** Names and titles an email needs, read fresh so edits are picked up. */
 async function loadContext(warranty: any) {
-  const [user, product, order] = await Promise.all([
+  const [user, product, order, store] = await Promise.all([
     User.findById(warranty.userId).select("name email").lean(),
     Product.findById(warranty.productId).select("title").lean(),
     Order.findById(warranty.orderId).select("orderNumber").lean(),
+    // The store's name and inbox are edited in the dashboard, not in the code.
+    getMailIdentity(),
   ]);
 
   return {
@@ -77,22 +78,26 @@ async function loadContext(warranty: any) {
     customerEmail: (user as any)?.email as string | undefined,
     productTitle: (product as any)?.title as string | undefined,
     orderNumber: (order as any)?.orderNumber as string | undefined,
+    storeName: store.storeName,
+    supportInbox: store.supportInbox,
   };
 }
 
 /** Tells the store inbox that a claim was filed, or answered. */
 export async function notifyClaimSubmitted(warranty: any, replyMessage?: string) {
   try {
-    const inbox = process.env.STORE_INBOX;
-    if (!inbox) {
-      console.warn("[warranty] STORE_INBOX is not set, claim email skipped");
+    const context = await loadContext(warranty);
+    if (!context.supportInbox) {
+      console.warn("[warranty] Site Settings has no support email, claim email skipped");
       return;
     }
 
-    const context = await loadContext(warranty);
     const { subject, html } = claimSubmittedEmail({
-      storeName: STORE_NAME,
-      ...context,
+      storeName: context.storeName,
+      customerName: context.customerName,
+      customerEmail: context.customerEmail,
+      productTitle: context.productTitle,
+      orderNumber: context.orderNumber,
       reason: warranty.claimReason || "",
       description: replyMessage || warranty.claimDescription || "",
       images: warranty.claimImages || [],
@@ -100,7 +105,7 @@ export async function notifyClaimSubmitted(warranty: any, replyMessage?: string)
     });
 
     // Reply-to the customer, so the admin can answer from the inbox directly.
-    await sendMail({ to: inbox, subject, html, replyTo: context.customerEmail });
+    await sendMail({ to: context.supportInbox, subject, html, replyTo: context.customerEmail });
   } catch (err) {
     console.error("[warranty] Claim email failed:", (err as Error).message);
   }
@@ -116,7 +121,7 @@ export async function notifyClaimUpdated(warranty: any) {
     }
 
     const { subject, html } = claimUpdatedEmail({
-      storeName: STORE_NAME,
+      storeName: context.storeName,
       customerName: context.customerName,
       productTitle: context.productTitle,
       orderNumber: context.orderNumber,
@@ -142,11 +147,13 @@ export async function notifyWarrantiesIssued(order: any, issued: IssuedWarranty[
       return;
     }
 
+    const { storeName } = await getMailIdentity();
+
     // One email per covered item, because each item carries its own terms and
     // expiry date.
     for (const item of issued) {
       const { subject, html } = warrantyIssuedEmail({
-        storeName: STORE_NAME,
+        storeName,
         customerName: user.name,
         productTitle: item.productTitle ?? undefined,
         orderNumber: order.orderNumber,

@@ -1,9 +1,8 @@
 import { ApiError } from "../../utils/apiError";
 import { isMailConfigured, sendMail } from "../../utils/mailer";
 import { contactMessageEmail } from "../../utils/emailTemplates";
+import { getMailIdentity } from "../site-settings/site-settings.service";
 import { ContactMessageInput } from "./contact.validator";
-
-const STORE_NAME = process.env.STORE_NAME || "Sparq";
 
 /**
  * Emails a visitor's message to the store inbox.
@@ -13,18 +12,27 @@ const STORE_NAME = process.env.STORE_NAME || "Sparq";
  * nothing left the server would leave them waiting for a reply that never comes.
  */
 export async function sendContactMessage(data: ContactMessageInput): Promise<void> {
-  // A dedicated inbox wins, but one shared store inbox is enough to start.
-  const inbox = process.env.CONTACT_INBOX || process.env.STORE_INBOX;
+  // The name and both addresses come from Site Settings, so the owner changes
+  // them in the dashboard instead of in a deployment.
+  const { storeName, supportInbox, contactInbox } = await getMailIdentity();
+
+  // "General & Business" goes to the contact address, everything else to
+  // support. Both fall back to the other one when it has not been filled in.
+  const isGeneral = data.department === "contact";
+  const inbox = isGeneral ? contactInbox : supportInbox;
 
   if (!inbox) {
-    throw new ApiError(503, "The contact inbox is not configured yet");
+    throw new ApiError(
+      503,
+      `Site Settings has no ${isGeneral ? "contact" : "support"} email yet`
+    );
   }
   if (!isMailConfigured()) {
     throw new ApiError(503, "Email sending is not configured yet");
   }
 
   const { subject, html } = contactMessageEmail({
-    storeName: STORE_NAME,
+    storeName,
     name: data.name,
     email: data.email,
     department: data.department,
