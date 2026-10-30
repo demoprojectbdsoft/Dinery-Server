@@ -115,6 +115,11 @@ export async function createProduct(data: CreateProductInput) {
   const existing = await Product.findOne({ slug: data.slug });
   if (existing) throw new ApiError(409, "Slug already in use");
 
+  // "No warranty" means no coverage, so the period is dropped with it. Without
+  // this a product could be saved as `none` with 12 months and still create a
+  // warranty record on delivery, because records only look at the period.
+  if (data.warrantyType === "none") data.warrantyPeriodMonths = 0;
+
   const product = await Product.create(data);
   return formatProduct(product);
 }
@@ -262,6 +267,22 @@ export async function getProducts(query: GetProductsQuery) {
 }
 
 export async function updateProduct(id: string, data: UpdateProductInput) {
+  const current = await Product.findById(id);
+  if (!current) throw new ApiError(404, "Product not found");
+
+  // Only the fields that were sent are in `data`, so the two warranty fields are
+  // judged on the combination the product will end up with.
+  const nextType = data.warrantyType ?? current.warrantyType;
+  if (nextType === "none") {
+    data.warrantyPeriodMonths = 0;
+  } else if ((data.warrantyPeriodMonths ?? 0) > 0 && current.warrantyType === "none") {
+    // Adding a period to a product marked as uncovered is a contradiction.
+    throw new ApiError(
+      400,
+      "This product is marked No warranty. Choose a warranty type before setting a period."
+    );
+  }
+
   const product = await Product.findByIdAndUpdate(id, data, { new: true });
   if (!product) throw new ApiError(404, "Product not found");
   return formatProduct(product);
