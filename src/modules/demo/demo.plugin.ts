@@ -2,6 +2,8 @@ import mongoose, { Schema } from "mongoose";
 import { inDemoRequest } from "./demo.context";
 
 // Only these collections are tracked (what the demo admin may change).
+// Anything missing here is edited by the demo admin and stays edited for good,
+// so a new admin screen needs its collection added to this list.
 export const TRACKED = [
   "categories",
   "subcategories",
@@ -10,8 +12,14 @@ export const TRACKED = [
   "productreviews",
   "orders",
   "orderstatuslogs",
-  "sitesettings",
+  "transactions",
   "warranties",
+  "messages",
+  "sitesettings",
+  // Better-Auth stores accounts in "user" (singular). Tracked because the users
+  // screen changes roles: without it a demo visitor could promote themselves to
+  // a real admin and keep the account after the nightly restore.
+  "user",
 ];
 export const UNDO_COLLECTION = "demo_undo";
 

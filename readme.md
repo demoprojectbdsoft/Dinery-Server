@@ -577,7 +577,13 @@ Real admin writes ─► nothing logged                        ─► change is 
 | `demo.service.ts` | Reads `demo_undo` and reverts everything. Safe to run twice. |
 | `demo.route.ts` / `demo.controller.ts` | The restore endpoint, behind cron-or-admin. |
 
-**Not restored:** users, orders, transactions, cart, wishlist and auth collections — the demo admin is blocked from changing them in the first place.
+**Tracked collections** (`TRACKED` in `demo.plugin.ts`): `categories`, `subcategories`, `products`, `slides`, `productreviews`, `orders`, `orderstatuslogs`, `transactions`, `warranties`, `messages`, `sitesettings` and `user`.
+
+`user` is the Better-Auth collection (singular because the auth library owns it). It is tracked even though the demo admin is blocked from most account routes: a role change is the one mistake that would outlive the nightly restore, so it is never left to a route guard alone.
+
+Adding a new admin screen means adding its collection to that list — an untracked collection is edited by the demo admin and stays edited.
+
+The response and the cron log name every collection that changed, for example `products -1/+1, user -0/+1`, so a nightly run is easy to audit.
 
 ### Test it
 
@@ -595,7 +601,7 @@ To check end to end: sign in as the demo admin, add a category and edit a produc
 ### Limitations
 
 - A demo-admin edit to a product is reverted whole, so a customer order placed in between can have its stock change rolled back too.
-- Writes that bypass Mongoose documents (`insertMany`, `bulkWrite`) are not tracked.
+- `bulkWrite` is not tracked (nothing in the codebase uses it today). Writes made with the raw driver, such as `collection.insertOne`, bypass Mongoose entirely and are invisible to the plugin — the restore is the only code that does that.
 
 ---
 
