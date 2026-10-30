@@ -215,11 +215,14 @@ export async function getWarrantyForOrderItem(
  * Fetch warranties for a customer, optionally filtered by status.
  */
 export async function getWarranties(query: GetWarrantiesQuery) {
-  const { userId, productId, orderId, status, page, limit } = query;
+  const { userId, productId, orderId, status, warrantyType, page, limit } = query;
   const filter: any = {};
   if (userId) filter.userId = userId;
   if (productId) filter.productId = productId;
   if (orderId) filter.orderId = orderId;
+  // The type lives beside the status, so both filters simply narrow the same
+  // list and can be used together.
+  if (warrantyType) filter.warrantyType = warrantyType;
   if (status) {
     // "claimed" is a group, not a status: it answers "what came in from
     // customers?", which is what the admin screen opens on. Everything else is

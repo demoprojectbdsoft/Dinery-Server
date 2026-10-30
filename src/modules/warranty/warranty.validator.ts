@@ -77,6 +77,10 @@ export const getWarrantiesQuerySchema = z.object({
   productId: z.string().optional(),
   orderId: z.string().optional(),
   status: z.string().optional(),
+  // The warranty type copied onto the record when it was issued (manufacturer,
+  // seller, extended, other or none). Matched exactly, so an unknown value
+  // simply finds nothing instead of being treated as "all".
+  warrantyType: z.string().optional(),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
