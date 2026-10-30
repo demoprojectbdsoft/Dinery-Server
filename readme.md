@@ -301,6 +301,24 @@ validate stock ─► redeem points (optional) ─► compute totals ─► crea
 4. Points **spent** at checkout are always returned.
 5. Points **earned** from a delivered order are taken back (a return), and the tier is re-checked.
 
+**What each outcome settles** — same rules whether the customer responded or an admin moved the order:
+
+| Item | On delivery | On cancellation |
+|---|---|---|
+| Payment record | every linked transaction switches to `success` | every linked transaction switches to `failed`, whatever the method |
+| Quantity / stock | unchanged — checkout already took the quantity out of stock | the quantity is added back to `stockQuantity` |
+| Sold count | each product's `sellCount` grows by the quantity | `sellCount` shrinks by the quantity **only** when the order had already been delivered |
+| Points spent at checkout | stay spent — they were already turned into the discount | returned in full |
+| Points earned | `pointsEarned`, worked out at checkout, is credited to the balance | taken back, but only on an order that had been delivered |
+| Membership tier | re-checked after the credit | re-checked after every balance change |
+| Warranty | one record per item, active from the delivery date | open records switch to `expired` — kept for history, never deleted |
+| Cart | already cleared when the order was placed | not restored |
+
+Two safety notes:
+
+- Stock is taken at **checkout**, not at delivery, so a shipped order has already reduced what is on sale. Delivery only counts the sale.
+- Delivery returns early when the order was already delivered, and `cancelled` is a terminal status, so points, sold counts, stock and warranties can never be settled twice.
+
 ### Loyalty points & membership
 
 ```
