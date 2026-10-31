@@ -65,6 +65,14 @@ type PopulatedProduct = {
   isFeatured?: boolean;
 };
 
+type PopulatedStore = { _id?: unknown; name?: string; slug?: string; logo?: string };
+type PopulatedUser = { _id?: unknown; name?: string };
+
+/** Enough of the shop and its owner for a board that lists everyone's rows. */
+const POPULATE_PRODUCT = "title image price vendorProductStatus isFeatured";
+const POPULATE_STORE = "name slug logo";
+const POPULATE_VENDOR = "name";
+
 /** What every desk and screen is handed for one placement. */
 export interface PromotionDto {
   _id: string;
@@ -87,6 +95,9 @@ export interface PromotionDto {
     vendorProductStatus: string;
     isFeatured: boolean;
   } | null;
+  /** The shop the placement lifts, named so a board of everyone's rows reads. */
+  store: { _id: string; name: string; slug: string; logo: string } | null;
+  vendorName: string;
   startsAt: Date | null;
   endsAt: Date | null;
   endedAt: Date | null;
@@ -103,6 +114,12 @@ export function toPromotionDto(row: any): PromotionDto {
   const product = (row.productId && typeof row.productId === "object"
     ? (row.productId as PopulatedProduct)
     : null) as PopulatedProduct | null;
+  const populatedStore = (row.storeId && typeof row.storeId === "object"
+    ? (row.storeId as PopulatedStore)
+    : null) as PopulatedStore | null;
+  const populatedVendor = (row.vendorId && typeof row.vendorId === "object"
+    ? (row.vendorId as PopulatedUser)
+    : null) as PopulatedUser | null;
 
   let state: "live" | "ended" | "cancelled" = "ended";
   if (row.status === "cancelled") state = "cancelled";
@@ -132,6 +149,16 @@ export function toPromotionDto(row: any): PromotionDto {
           isFeatured: Boolean(product.isFeatured),
         }
       : null,
+    /** Both are null / empty when the row was read without its joins. */
+    store: populatedStore
+      ? {
+          _id: String(populatedStore._id),
+          name: populatedStore.name || "",
+          slug: populatedStore.slug || "",
+          logo: populatedStore.logo || "",
+        }
+      : null,
+    vendorName: populatedVendor?.name || "",
     startsAt: row.startsAt ?? null,
     endsAt: row.endsAt ?? null,
     endedAt: row.endedAt ?? null,
@@ -143,14 +170,14 @@ export function toPromotionDto(row: any): PromotionDto {
   };
 }
 
-/** One placement with its product attached. */
+/** One placement with its product, its shop and its owner attached. */
 async function readPromotion(id: string) {
   if (!Types.ObjectId.isValid(id)) throw new ApiError(404, "No such promotion");
 
-  const row = await FeaturedPromotion.findById(id).populate(
-    "productId",
-    "title image price vendorProductStatus isFeatured"
-  );
+  const row = await FeaturedPromotion.findById(id)
+    .populate("productId", POPULATE_PRODUCT)
+    .populate("storeId", POPULATE_STORE)
+    .populate("vendorId", POPULATE_VENDOR);
   if (!row) throw new ApiError(404, "No such promotion");
   return row;
 }
@@ -272,7 +299,9 @@ export async function listPromotions(query: PromotionListQuery, scope?: { vendor
   }
 
   const rows = await FeaturedPromotion.find(filter)
-    .populate("productId", "title image price vendorProductStatus isFeatured")
+    .populate("productId", POPULATE_PRODUCT)
+    .populate("storeId", POPULATE_STORE)
+    .populate("vendorId", POPULATE_VENDOR)
     .sort({ startsAt: -1, createdAt: -1 })
     .lean();
 

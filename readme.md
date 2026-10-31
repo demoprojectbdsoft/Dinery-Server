@@ -224,7 +224,7 @@ A placement is a dated row, not a checkbox. `FeaturedPromotion` records who boug
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `GET` | `/promotions` | Admin | Every placement or one seller's (`vendorId`), filterable by `kind` (`product` / `store` / `all`) and `status` (`live` / `ended` / `cancelled` / `all`); paginated, with a count per state |
+| `GET` | `/promotions` | Admin | Every placement or one seller's (`vendorId`), filterable by `kind` (`product` / `store` / `all`) and `status` (`live` / `ended` / `cancelled` / `all`); paginated, with a count per state. Each row carries the product, the shop and the seller's name, so a board of everyone's placements reads without a second call |
 | `POST` | `/promotions` | Admin | Grant a placement: `kind` plus `productId` or `vendorId`, `days` (1–365, default 30) and an optional `reason` the seller reads. The shop it belongs to is read from the row being lifted, never sent |
 | `DELETE` | `/promotions/:id` | Admin | End a placement early with the reason. Nothing is deleted — the row stays so the desk can say what ran and why it stopped |
 | `GET` | `/promotions/expire` | Cron / Admin | The daily sweep: closes every placement past `endsAt` and dims what it lifted |
