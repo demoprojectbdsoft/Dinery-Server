@@ -25,6 +25,9 @@ import activityRoutes from "./modules/activity/activity.route";
 import deliveryRoutes from "./modules/delivery/delivery.route";
 import vendorApplicationRoutes from "./modules/vendor/vendor-application.route";
 import vendorPlanRoutes from "./modules/vendor/vendor-plan.route";
+import vendorStoreRoutes from "./modules/vendor/vendor-store.route";
+import vendorProductRoutes from "./modules/vendor/vendor-product.route";
+import vendorSubscriptionRoutes from "./modules/vendor/vendor-subscription.route";
 import { errorMiddleware } from "./middlewares/error.middleware";
 import { notFound } from "./middlewares/notFound.middleware";
 
@@ -65,6 +68,9 @@ app.use("/api/activities", activityRoutes);
 app.use("/api/deliveries", deliveryRoutes);
 app.use("/api/vendor-applications", vendorApplicationRoutes);
 app.use("/api/vendor-plans", vendorPlanRoutes);
+app.use("/api/vendor-store", vendorStoreRoutes);
+app.use("/api/vendor-products", vendorProductRoutes);
+app.use("/api/vendor-subscription", vendorSubscriptionRoutes);
 app.use("/api/demo", demoRoutes);
 
 app.use(notFound);

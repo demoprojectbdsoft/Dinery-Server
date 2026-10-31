@@ -7,7 +7,10 @@ import { FeaturedPromotion } from "./featured-promotion.model";
 import { SubscriptionPlan } from "./subscription-plan.model";
 import { SubscriptionTransaction, VendorSubscription } from "./vendor-subscription.model";
 import { getPlan, commissionForPlan } from "./vendor-plan.service";
+import { requireStore } from "./vendor-store.service";
+import type { CheckoutSubscriptionInput } from "./vendor-subscription.validator";
 import {
+  PLAN_RANK,
   billingDays,
   planPrice,
   type BillingCycle,
@@ -432,6 +435,132 @@ export async function getSubscriptionOverview(vendorId: string) {
   ]);
 
   return { ...state, plans, payments, history };
+}
+
+/** Wallet SMS references are letters and digits, never spaces or dashes. */
+const WALLET_REFERENCE = /^[A-Z0-9]{8,20}$/;
+
+function normaliseReference(value?: string): string {
+  return (value || "").replace(/[\s-]/g, "").toUpperCase();
+}
+
+/** Which kind of change a purchase is, read from what the vendor already has. */
+function purchasePurpose(
+  state: VendorPlanState,
+  planId: VendorPlanId
+): "activation" | "renewal" | "upgrade" | "downgrade" {
+  if (!state.isLive) return state.subscription ? "renewal" : "activation";
+  if (state.plan.id === planId) return "renewal";
+  return PLAN_RANK[planId] > PLAN_RANK[state.plan.id] ? "upgrade" : "downgrade";
+}
+
+/**
+ * Buys one plan period.
+ *
+ * Everything that decides money happens here: the price comes from the plan
+ * table, the store and vendor come from the token, and a repeated request with
+ * the same `idempotencyKey` returns the first outcome instead of charging
+ * twice. A malformed wallet reference is written down as a failed payment so
+ * the vendor's history explains why nothing changed.
+ */
+export async function checkoutSubscription(
+  vendorId: string,
+  input: CheckoutSubscriptionInput
+) {
+  const store = await requireStore(vendorId);
+  const plan = await getPlan(input.planId);
+  const state = await getVendorPlanState(vendorId);
+  const price = planPrice(plan, input.billingCycle);
+  const purpose = purchasePurpose(state, plan.id);
+
+  if (input.idempotencyKey) {
+    const previous = await SubscriptionTransaction.findOne({
+      vendorId,
+      idempotencyKey: input.idempotencyKey,
+    }).lean();
+    if (previous) {
+      return {
+        transaction: previous,
+        subscription: state.subscription,
+        plan,
+        price,
+        purpose,
+        duplicate: true,
+      };
+    }
+  }
+
+  const reference = normaliseReference(input.transactionId);
+  const paidByWallet = input.method !== "wallet";
+
+  if (paidByWallet && !WALLET_REFERENCE.test(reference)) {
+    await SubscriptionTransaction.create({
+      vendorId,
+      storeId: store._id,
+      plan: plan.id,
+      billingCycle: input.billingCycle,
+      amount: price,
+      method: input.method,
+      status: "failed",
+      reference: reference || "MISSING",
+      purpose,
+      idempotencyKey: input.idempotencyKey ?? null,
+      failureReason: "The wallet transaction id is missing or malformed",
+    }).catch(() => undefined);
+
+    throw new ApiError(
+      400,
+      "Enter the transaction id from the wallet confirmation SMS, for example 8 to 20 letters or digits."
+    );
+  }
+
+  let transaction;
+  try {
+    transaction = await SubscriptionTransaction.create({
+      vendorId,
+      storeId: store._id,
+      plan: plan.id,
+      billingCycle: input.billingCycle,
+      amount: price,
+      method: input.method,
+      status: "success",
+      reference: reference || `DEMO-${String(store._id).slice(-6).toUpperCase()}`,
+      isDemo: true,
+      purpose,
+      idempotencyKey: input.idempotencyKey ?? null,
+      paidAt: new Date(),
+    });
+  } catch (error) {
+    // Two clicks raced past the read above; the unique key kept one payment.
+    if ((error as { code?: number }).code === 11000 && input.idempotencyKey) {
+      const previous = await SubscriptionTransaction.findOne({
+        vendorId,
+        idempotencyKey: input.idempotencyKey,
+      }).lean();
+      return {
+        transaction: previous,
+        subscription: state.subscription,
+        plan,
+        price,
+        purpose,
+        duplicate: true,
+      };
+    }
+    throw error;
+  }
+
+  const subscription = await startSubscription({
+    vendorId,
+    storeId: String(store._id),
+    planId: plan.id,
+    billingCycle: input.billingCycle,
+    pricePaid: price,
+    purpose,
+    transactionId: String(transaction._id),
+    note: `${plan.name} plan · ${input.billingCycle}`,
+  });
+
+  return { transaction, subscription, plan, price, purpose, duplicate: false };
 }
 
 /** True when the id is a usable ObjectId, so a stray string is a 404 not a crash. */

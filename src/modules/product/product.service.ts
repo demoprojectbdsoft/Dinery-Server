@@ -33,7 +33,7 @@ async function getRatingsMap(productIds: string[]) {
 
 // Shapes a raw Mongoose product document into the API response format.
 // Accepts an optional ratingsMap to attach live rating/reviewCount from the reviews collection.
-function formatProduct(product: any, ratingsMap?: Map<string, any>) {
+export function formatProduct(product: any, ratingsMap?: Map<string, any>) {
   const obj = product.toObject ? product.toObject({ flattenMaps: true }) : product;
   const id = obj._id?.toString() ?? obj.id;
   const stat = ratingsMap?.get(id);
@@ -296,6 +296,21 @@ async function buildFilterConditions(query: GetProductsQuery) {
   const activeBadge = query.badge || query.badges;
   if (activeBadge?.trim()) conditions.push(buildBadgeCondition(activeBadge));
 
+  // The public catalogue never serves a vendor's draft, archived or hidden row.
+  // Admin-created products carry no vendor status, so they stay visible exactly
+  // as before this field existed.
+  conditions.push({
+    $and: [
+      { isVisible: { $ne: false } },
+      {
+        $or: [
+          { vendorProductStatus: { $exists: false } },
+          { vendorProductStatus: { $in: ["published", "out_of_stock"] } },
+        ],
+      },
+    ],
+  });
+
   if (isFeatured !== undefined) conditions.push({ isFeatured });
   if (inStock === true) {
     // An untracked product (no stock quantity) is always available, even if an
@@ -389,6 +404,14 @@ export async function getProductBySlug(slug: string) {
     .populate("categoryId", "name slug")
     .populate("subCategoryIds", "name slug");
   if (!product) throw new ApiError(404, "Product not found");
+
+  // A vendor's hidden or unpublished row is not a storefront page, even to
+  // someone who guessed the link.
+  const blockedStatuses = ["draft", "pending_review", "rejected", "archived"];
+  if (product.isVisible === false || blockedStatuses.includes(String((product as any).vendorProductStatus))) {
+    throw new ApiError(404, "Product not found");
+  }
+
   const ratingsMap = await getRatingsMap([product._id.toString()]);
   return formatProduct(product, ratingsMap);
 }
