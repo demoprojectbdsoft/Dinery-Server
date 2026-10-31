@@ -7,6 +7,13 @@ import { requireRole } from "../../middlewares/role.middleware";
 
 const router = Router();
 
+// ─── Public ─────────────────────────────────────────────────────────────────
+// The discovery list and one shop's own page, served before the auth block,
+// because a shopper looks at a store before deciding whether to sign in. Only
+// trading shops answer, and the rows carry no seller contact details.
+router.get("/public", controller.getPublicStores);
+router.get("/public/:slug", controller.getPublicStore);
+
 // The signed-in vendor's own shop, plus the store team's list. Every route
 // either resolves the store from the token or asks for everyone's, so there is
 // deliberately no "/:id" here for a seller to point at another shop.

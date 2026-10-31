@@ -2,6 +2,7 @@ import { Product } from "./product.model";
 import { ProductReview } from "../review/review.model";
 import { Category } from "../category/category.model";
 import { SubCategory } from "../subcategory/subcategory.model";
+import { VendorStore } from "../vendor/vendor-store.model";
 import { ApiError } from "../../utils/apiError";
 import { idVariants } from "../../utils/ids";
 import { CreateProductInput, UpdateProductInput, GetProductsQuery } from "./product.validator";
@@ -78,6 +79,14 @@ export function formatProduct(product: any, ratingsMap?: Map<string, any>) {
 
   const sellCount = typeof obj.sellCount === "number" ? obj.sellCount : 0;
 
+  // Who sells this, for the "Sold by" link a shopper follows to the storefront.
+  // Only a populated store gives words: a row read without the join carries
+  // none, so the card simply shows no seller rather than half a name.
+  const seller =
+    obj.storeId && typeof obj.storeId === "object" && obj.storeId.name
+      ? { id: String(obj.storeId._id), name: obj.storeId.name, slug: obj.storeId.slug || "" }
+      : undefined;
+
   const totalProfit =
     unitProfit != null
       ? Math.round(unitProfit * sellCount * 100) / 100
@@ -86,6 +95,7 @@ export function formatProduct(product: any, ratingsMap?: Map<string, any>) {
   return {
     ...obj,
     id,
+    seller,
     badges: Array.isArray(obj.badges) ? obj.badges : [],
     specifications,
     // A product saved with no stock quantity is not stock-tracked: nothing can
@@ -283,6 +293,20 @@ async function buildFilterConditions(query: GetProductsQuery) {
   const { category, subCategory, search, minPrice, maxPrice, isFeatured, inStock } = query;
   const conditions: any[] = [];
 
+  // One seller's shelf. A slug that names no shop narrows to nothing rather
+  // than falling through to the whole catalogue, so a dead storefront link
+  // shows an empty shelf instead of everyone's stock.
+  if (query.storeSlug || query.storeId) {
+    let storeId = query.storeId;
+    if (query.storeSlug) {
+      const store = await VendorStore.findOne({
+        slug: query.storeSlug.trim().toLowerCase(),
+      }).select("_id").lean();
+      storeId = store ? String(store._id) : "none";
+    }
+    conditions.push({ storeId });
+  }
+
   if (category) conditions.push(await buildCategoryCondition(category));
   if (subCategory) conditions.push(await buildSubCategoryCondition(subCategory));
   if (search?.trim()) conditions.push(buildSearchCondition(search));
@@ -334,13 +358,17 @@ export async function getProducts(query: GetProductsQuery) {
   const sortCriteria = SORT_OPTIONS[sort ?? ""] ?? { createdAt: -1 };
   const skip = (page - 1) * limit;
 
+  const find = Product.find(filter)
+    .populate("categoryId", "name slug")
+    .populate("subCategoryIds", "name slug");
+
+  // The seller's name rides along for the cards, but a page that was asked
+  // for one shop already knows the shop — the join is only worth its cost
+  // when the rows may come from many sellers.
+  if (!query.storeSlug && !query.storeId) find.populate("storeId", "name slug");
+
   const [products, total] = await Promise.all([
-    Product.find(filter)
-      .populate("categoryId", "name slug")
-      .populate("subCategoryIds", "name slug")
-      .sort(sortCriteria)
-      .skip(skip)
-      .limit(limit),
+    find.sort(sortCriteria).skip(skip).limit(limit),
     Product.countDocuments(filter),
   ]);
 
@@ -416,7 +444,8 @@ export async function deleteProduct(id: string) {
 export async function getProductBySlug(slug: string) {
   const product = await Product.findOne({ slug })
     .populate("categoryId", "name slug")
-    .populate("subCategoryIds", "name slug");
+    .populate("subCategoryIds", "name slug")
+    .populate("storeId", "name slug");
   if (!product) throw new ApiError(404, "Product not found");
 
   // A vendor's hidden or unpublished row is not a storefront page, even to

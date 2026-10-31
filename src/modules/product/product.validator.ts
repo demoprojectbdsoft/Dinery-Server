@@ -50,6 +50,10 @@ export const getProductsQuerySchema = z.object({
   subCategory: z.string().optional(),
   subCategoryId: z.string().optional(),
   search: z.string().optional(),
+  // One seller's shelf: the storefront passes the shop's slug, and a desk that
+  // already resolved the store can pass its id straight through.
+  storeSlug: z.string().trim().max(140).optional(),
+  storeId: z.string().trim().optional(),
   minPrice: z.coerce.number().nonnegative().optional(),
   maxPrice: z.coerce.number().nonnegative().optional(),
   minDiscount: z.coerce.number().nonnegative().optional(),

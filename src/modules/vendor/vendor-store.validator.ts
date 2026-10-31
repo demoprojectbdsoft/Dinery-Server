@@ -66,3 +66,38 @@ export const storeQuerySchema = z.object({
 });
 
 export type StoreQuery = z.infer<typeof storeQuerySchema>;
+
+/**
+ * The shopper's read of the shops that trade today. The `sort` list accepts
+ * "featured", "rating", "newest" and "popular".
+ *
+ * There is no status filter here on purpose: the public only ever sees an
+ * active, visible shop, so the one choice a caller gets is which of those
+ * to put first. `featured` narrows to the shops a paid placement is lighting
+ * up right now, so a stale flag cannot keep a shop on the rail.
+ */
+export const publicStoreQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  category: z.string().trim().max(80).optional(),
+  featured: z
+    .preprocess(
+      (value) =>
+        value === "true" || value === true ? true : value === "false" || value === false ? false : undefined,
+      z.boolean().optional()
+    ),
+  sort: z.enum(["featured", "rating", "newest", "popular"]).optional().default("featured"),
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(12),
+});
+
+export type PublicStoreQuery = z.infer<typeof publicStoreQuerySchema>;
+
+/** A storefront URL segment: the slug the shop was published under. */
+export const storeSlugParamSchema = z.object({
+  slug: z
+    .string()
+    .trim()
+    .min(2, "Store not found")
+    .max(140)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Store not found"),
+});

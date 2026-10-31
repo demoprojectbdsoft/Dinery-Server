@@ -172,8 +172,8 @@ Base URL: `/api`. All replies use the same envelope: `{ success, message, data }
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `GET` | `/products` | Public | Search, filter, sort, paginate |
-| `GET` | `/products/:slug` | Public | Single product |
+| `GET` | `/products` | Public | Search, filter, sort, paginate. `storeSlug`/`storeId` narrow to one seller's shelf (an unknown slug shows an empty shelf, never the whole catalogue); rows answered from the public read carry a `seller` name and slug for the "Sold by" link |
+| `GET` | `/products/:slug` | Public | Single product, with its `seller` words when a shop sells it |
 | `POST` | `/products` | Admin | |
 | `PATCH` | `/products/:id` | Admin | |
 | `DELETE` | `/products/:id` | Admin | |
@@ -352,6 +352,8 @@ The storefront keeps no mailbox of its own. When a customer clicks **Forgot pass
 | `GET` | `/vendor-applications` | Admin | Search, status filter, pagination, per-status counts |
 | `GET` | `/vendor-applications/:id` | Admin | Application, applicant summary, created store |
 | `PATCH` | `/vendor-applications/:id/review` | Admin | `under_review`, `approve`, `reject` (reason required) |
+| `GET` | `/vendor-store/public` | Public | Trading shops only — `isVisible` and `status: active` are no-options, with `search` over name/description/category, `category`, `featured` (only placements still running), `sort` (`featured`/`rating`/`newest`/`popular`) and pagination. Rows carry no seller email, phone or exact address |
+| `GET` | `/vendor-store/public/:slug` | Public | One shop's own storefront page. A hidden, suspended or closed shop answers the same `404` as one that never existed |
 | `GET` | `/vendor-store` | Admin | Every shop on one page — `search` over name/slug/category/email, `status`, `featured`, paginated. Each row carries the seller's account id, which is what a storefront placement is granted to |
 | `GET` | `/vendor-plans` | Public | The three plans, merged with admin edits |
 | `PATCH` | `/vendor-plans/:planId` | Admin | Prices, limits, benefits, billing cycles, commission, grace period |
@@ -365,6 +367,8 @@ The storefront keeps no mailbox of its own. When a customer clicks **Forgot pass
 ### Seller workspace (`vendor`)
 
 Once the account is a vendor, everything else is scoped by the token. There is no `/:vendorId` route anywhere in the workspace: a seller reads and writes their own shop, catalogue, plan, orders and report, and a foreign id in a path answers `404` — the row simply is not theirs to find.
+
+The public reads above answer for every shopper without a token, and they cannot be talked into showing more than a trading shop: a hidden store leaves the listings but stays reachable by its old link, while a suspended or closed one answers `404` on both reads. What a public row never contains is the seller's email, phone or exact street address — the locator reads city and area off the same DTO, and a shopper who needs to reach a shop follows the storefront instead.
 
 | Method | Path | Access | Notes |
 |---|---|---|---|

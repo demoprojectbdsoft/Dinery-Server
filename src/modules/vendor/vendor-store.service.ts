@@ -1,6 +1,6 @@
 import { ApiError } from "../../utils/apiError";
 import { VendorStore } from "./vendor-store.model";
-import type { StoreQuery, UpdateStoreInput } from "./vendor-store.validator";
+import type { StoreQuery, UpdateStoreInput, PublicStoreQuery } from "./vendor-store.validator";
 
 /**
  * The vendor's own storefront.
@@ -48,6 +48,7 @@ export function toStoreDto(store: any) {
     productCount: Number(store.productCount) || 0,
     reviewCount: Number(store.reviewCount) || 0,
     rating: Number(store.rating) || 0,
+    completedOrders: Number(store.completedOrders) || 0,
     suspendedReason: store.suspendedReason || "",
     createdAt: store.createdAt,
     updatedAt: store.updatedAt,
@@ -139,6 +140,42 @@ export async function updateMyStore(userId: string, patch: UpdateStoreInput) {
   return toStoreDto(updated);
 }
 
+/**
+ * The shop as a stranger sees it.
+ *
+ * The seller's phone, email, exact address and suspension note are the
+ * platform's private record; a public page gets what a shopper can act on —
+ * the signboard, the contact buttons the seller chose to publish, and the
+ * numbers the platform keeps honest. `socialLinks` and `website` stay, because
+ * a seller fills them to be reached.
+ */
+export function toPublicStoreDto(store: any) {
+  const dto = toStoreDto(store);
+  return {
+    _id: dto._id,
+    name: dto.name,
+    slug: dto.slug,
+    description: dto.description,
+    logo: dto.logo,
+    coverImage: dto.coverImage,
+    category: dto.category,
+    website: dto.website,
+    socialLinks: dto.socialLinks,
+    address: {
+      country: dto.address.country,
+      division: dto.address.division,
+      city: dto.address.city,
+      area: dto.address.area,
+    },
+    isFeatured: Boolean(dto.isFeatured && (!dto.featuredUntil || new Date(dto.featuredUntil) > new Date())),
+    productCount: dto.productCount,
+    reviewCount: dto.reviewCount,
+    rating: dto.rating,
+    completedOrders: dto.completedOrders,
+    createdAt: dto.createdAt,
+  };
+}
+
 /** The store a public page reads: visible, active and not suspended. */
 export async function getVisibleStoreBySlug(slug: string) {
   const store = await VendorStore.findOne({
@@ -149,6 +186,58 @@ export async function getVisibleStoreBySlug(slug: string) {
 
   if (!store) throw new ApiError(404, "Store not found");
   return toStoreDto(store);
+}
+
+/** The same shop for a public page, with the private fields off. */
+export async function getPublicStoreBySlug(slug: string) {
+  return toPublicStoreDto(await getVisibleStoreBySlug(slug));
+}
+
+const PUBLIC_STORE_SORTS: Record<string, Record<string, 1 | -1>> = {
+  featured: { isFeatured: -1, rating: -1, productCount: -1 },
+  rating: { rating: -1, reviewCount: -1 },
+  newest: { createdAt: -1 },
+  popular: { completedOrders: -1, lifetimeSales: -1 },
+};
+
+/**
+ * One page of trading shops, for the storefront and the discovery page.
+ *
+ * A hidden or suspended shop is not here at all — the model comment says a
+ * hidden shop stays reachable by link, which is what the single read allows —
+ * and a featured flag whose placement has expired is filtered defensively, so
+ * a sweep that has not run yet cannot leave a dead shop on the rail.
+ */
+export async function listPublicStores(query: PublicStoreQuery) {
+  const { search, category, featured, sort, page, limit } = query;
+  const filter: Record<string, unknown> = { isVisible: true, status: "active" };
+
+  if (search?.trim()) {
+    const match = new RegExp(escapeRegex(search.trim()), "i");
+    filter.$or = [{ name: match }, { description: match }, { category: match }];
+  }
+  if (category?.trim()) filter.category = category.trim();
+  if (featured === true) {
+    filter.isFeatured = true;
+    filter.$and = [
+      { $or: [{ featuredUntil: null }, { featuredUntil: { $exists: false } }, { featuredUntil: { $gt: new Date() } }] },
+    ];
+  }
+
+  const [rows, total] = await Promise.all([
+    VendorStore.find(filter)
+      .sort(PUBLIC_STORE_SORTS[sort] ?? PUBLIC_STORE_SORTS.featured)
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean(),
+    VendorStore.countDocuments(filter),
+  ]);
+
+  return {
+    stores: rows.map(toPublicStoreDto),
+    total,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
+  };
 }
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
