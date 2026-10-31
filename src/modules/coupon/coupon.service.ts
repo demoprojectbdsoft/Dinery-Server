@@ -58,10 +58,37 @@ function toIdString(value: unknown): string {
     : String(value);
 }
 
+/**
+ * The words a populated reference carries, or "" when it was not populated.
+ *
+ * The staff list reads the shop and the named lines alongside the code, but the
+ * checkout and the writes hand this same mapper a bare document. So a name is
+ * always a maybe: the screen falls back to a count rather than showing nothing.
+ */
+function refWords(value: unknown, keys: string[]): string {
+  if (!value || typeof value !== "object") return "";
+  const row = value as Record<string, unknown>;
+  for (const key of keys) {
+    if (typeof row[key] === "string" && row[key]) return row[key] as string;
+  }
+  return "";
+}
+
+/** Titles of the named products, empty when they were not read alongside. */
+function refsWords(list: unknown, keys: string[]): string[] {
+  if (!Array.isArray(list)) return [];
+  return list.map((entry) => refWords(entry, keys)).filter(Boolean);
+}
+
 export function toCouponDto(row: any) {
   const now = new Date();
   const total = Number(row.totalUsageLimit) || 0;
   const used = Number(row.usedCount) || 0;
+
+  // Whichever name the staff list managed to read: the shop's own name is the
+  // one a support desk recognises, so it wins over the account behind it.
+  const sellerName =
+    refWords(row.storeId, ["name"]) || refWords(row.vendorId, ["name", "email"]);
 
   return {
     _id: String(row._id),
@@ -88,6 +115,11 @@ export function toCouponDto(row: any) {
     remaining: total > 0 ? Math.max(total - used, 0) : 0,
     redemptionCount: (row.redemptions || []).length,
     state: couponState(row, now),
+    /** "" on a store-wide code, and on any read that did not look the shop up. */
+    sellerName,
+    storeSlug: refWords(row.storeId, ["slug"]),
+    productNames: refsWords(row.productIds, ["title"]),
+    categoryNames: refsWords(row.categoryIds, ["name"]),
     createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : null,
     updatedAt: row.updatedAt ? new Date(row.updatedAt).toISOString() : null,
   };
@@ -98,6 +130,10 @@ export function toCouponDto(row: any) {
  *
  * The vendor scope is passed in by the caller's own route, never read from the
  * query, so a seller asking for `owner=vendor` still only sees their own codes.
+ *
+ * Only the staff list looks the shop and the named lines up: a seller reading
+ * their own codes already knows their shop, and their picker resolves the
+ * titles from their own shelf.
  */
 export async function listCoupons(query: CouponQuery, scope?: { vendorId: string }) {
   const { owner, status, search, page, limit } = query;
@@ -116,7 +152,14 @@ export async function listCoupons(query: CouponQuery, scope?: { vendorId: string
     filter.$or = [{ code: match }, { title: match }, { description: match }];
   }
 
-  const rows = await Coupon.find(filter).sort({ isActive: -1, startDate: -1 }).lean();
+  const find = Coupon.find(filter).sort({ isActive: -1, startDate: -1 }).lean();
+  const rows = scope?.vendorId
+    ? await find
+    : await find
+        .populate("vendorId", "name email")
+        .populate("storeId", "name slug")
+        .populate("productIds", "title")
+        .populate("categoryIds", "name");
   const all = rows.map((row) => toCouponDto(row));
 
   // `state` is a reading of dates and counters, not a stored flag, so the filter
@@ -189,12 +232,34 @@ export async function requireCoupon(id: string, vendorId?: string) {
   return row;
 }
 
+/**
+ * The read a write starts from.
+ *
+ * With a vendor id it stays inside that seller's codes — a foreign id answers
+ * 404, never 403. Without one this is the staff desk, and the staff desk only
+ * writes the store's own codes: a seller's code is theirs to manage, because
+ * reawakening one from here would skip the plan check that stops a suspended
+ * shop from running a code it no longer has a slot for.
+ */
+async function loadForWrite(id: string, vendorId?: string) {
+  const row = await requireCoupon(id, vendorId);
+
+  if (!vendorId && row.ownerType !== "admin") {
+    throw new ApiError(
+      400,
+      `"${row.code}" is a seller's code. They stop or renew it from their own coupons desk`
+    );
+  }
+
+  return row;
+}
+
 export async function updateCoupon(
   id: string,
   input: UpdateCouponInput,
   vendorId?: string
 ) {
-  const row = await requireCoupon(id, vendorId);
+  const row = await loadForWrite(id, vendorId);
 
   if (input.code && input.code.toUpperCase() !== row.code) {
     await assertCodeIsFree(input.code, String(row._id));
@@ -217,7 +282,7 @@ export async function updateCoupon(
  * seller's plan usage and off the checkout, but it is never rewritten.
  */
 export async function stopCoupon(id: string, vendorId?: string, mode: "inactive" | "delete" = "inactive") {
-  const row = await requireCoupon(id, vendorId);
+  const row = await loadForWrite(id, vendorId);
 
   if (mode === "delete" && Number(row.usedCount) > 0) {
     // A code that has already saved somebody money stays: the redemption ledger

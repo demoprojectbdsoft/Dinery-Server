@@ -211,11 +211,11 @@ One collection serves both writers: the store team's global codes and a seller's
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `GET` | `/coupons` | Admin | Every code, filterable by `owner` (`all` / `admin` / `vendor`), `status` (`live` / `upcoming` / `expired` / `stopped` / `all`) and `search` over code, title and description; paginated, with a count per state |
+| `GET` | `/coupons` | Admin | Every code, filterable by `owner` (`all` / `admin` / `vendor`), `status` (`live` / `upcoming` / `expired` / `stopped` / `all`) and `search` over code, title and description; paginated, with a count per state. Each row names the shop behind a seller's code and the products or categories a code covers, so one read fills a board of everyone's codes |
 | `POST` | `/coupons` | Admin | `code` is stored upper-cased and must be free; `discountType` is `percentage` (1–100) or `fixed`; `endDate` must follow `startDate` |
 | `GET` | `/coupons/:id` | Admin | One code with its usage, remaining allowance and redemption count |
-| `PATCH` | `/coupons/:id` | Admin | Any field, so one switch can be flipped without resending the code |
-| `DELETE` | `/coupons/:id` | Admin | Deletes an unused code. A code that has already been redeemed is deactivated instead, so the ledger and the orders that quote it survive |
+| `PATCH` | `/coupons/:id` | Admin | Any field of a **store** code, so one switch can be flipped without resending it. A seller's code answers `400` — they manage it from their own desk |
+| `DELETE` | `/coupons/:id` | Admin | Deletes an unused store code. A code that has already been redeemed is deactivated instead, so the ledger and the orders that quote it survive. A seller's code answers `400` |
 | `POST` | `/coupons/validate` | Bearer | `code` plus `items[{productId, quantity}]` → the discount, or the reason there is none. Prices, sellers and categories are read back from the database, so nothing about the money comes from the browser |
 
 ### Featured promotions
@@ -573,6 +573,7 @@ Two owners, one engine. `ownerType` says who wrote the code, and that one field 
 | **One code, one meaning** | `code` is stored upper-cased under a unique index, so `save10` and `SAVE10` cannot be two coupons. A clash on write answers `409`. |
 | **Whose goods** | An admin code may name any product or category in the store. A vendor code only ever counts lines owned by that vendor; another shop's goods and the platform's stock are left at full price. |
 | **Narrowing** | `productIds` and `categoryIds` are both optional. Empty means everything the owner may discount, and a line qualifies through either list. |
+| **Each desk writes its own codes** | `/vendor-coupons` is scoped by the token and cannot find another shop's row; `/coupons` writes only rows whose `ownerType` is `admin`. A staff edit could otherwise wake a suspended seller's code and skip the allowance check that stops it. |
 | **What it is worth** | A percentage takes its share of the *eligible* subtotal, capped by `maxDiscountAmount` when that is set. A fixed amount is capped by the eligible subtotal. Money is rounded to two decimals and recomputed on the server every single time. |
 | **Refusals name themselves** | "not active yet", "expired", "used up", the per-customer limit, "does not apply to anything in your cart" and the `minOrderAmount` shortfall are separate messages — a shopper who typed a real code correctly must not be told it is invalid. |
 | **State is derived** | `live` / `upcoming` / `expired` / `stopped` is read from `isActive`, the two dates and the usage counter. It is never a stored flag, so it cannot go stale. |
