@@ -19,12 +19,19 @@ export const isCustomerRole = (role?: string | null) => normalizeRole(role) === 
 export const isRiderRole = (role?: string | null) => normalizeRole(role) === "rider";
 export const isVendorRole = (role?: string | null) => normalizeRole(role) === "vendor";
 
-/** Roles that manage the shop but never buy from it. */
-const NON_SHOPPING_ROLES = ["admin", "demoadmin", "rider", "vendor"];
+/**
+ * Roles that manage the shop but never buy from it.
+ *
+ * A vendor is deliberately absent: an approved seller keeps the same account
+ * and may shop from other vendors, so the marketplace tables still accept their
+ * cart and wishlist writes.
+ */
+const NON_SHOPPING_ROLES = ["admin", "demoadmin", "rider"];
 
 /**
- * Only a customer shops. Staff and riders browse the storefront like anybody,
- * but a cart or a wishlist belongs to a buyer, so those writes are refused.
+ * Only a customer — and now a vendor acting as one — shops. Staff and riders
+ * browse the storefront like anybody, but a cart belongs to a buyer, so those
+ * writes are refused.
  */
 export const canShop = (role?: string | null) => !NON_SHOPPING_ROLES.includes(normalizeRole(role));
 

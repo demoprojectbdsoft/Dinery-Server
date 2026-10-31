@@ -307,9 +307,49 @@ The storefront keeps no mailbox of its own. When a customer clicks **Forgot pass
 | `PATCH` | `/site-settings` | Admin | Public branding, About page copy, opening hours, shipping, currency, `maintenanceMode` |
 | `GET` / `POST` | `/demo/restore` | Cron | Reverts demo-admin changes. `GET` exists because Vercel Cron only sends `GET` |
 
+### Vendor applications & plans
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| `POST` | `/vendor-applications` | Bearer | Submit the six-step application. One open application per account; the account keeps the `customer` role |
+| `GET` | `/vendor-applications/mine` | Bearer | The caller's own application, latest first |
+| `POST` | `/vendor-applications/mine/cancel` | Bearer | Withdraw a `pending` or `under_review` application |
+| `POST` | `/vendor-applications/status` | Internal | Status for an email whose password the auth layer already checked. No public lookup exists |
+| `GET` | `/vendor-applications` | Admin | Search, status filter, pagination, per-status counts |
+| `GET` | `/vendor-applications/:id` | Admin | Application, applicant summary, created store |
+| `PATCH` | `/vendor-applications/:id/review` | Admin | `under_review`, `approve`, `reject` (reason required) |
+| `GET` | `/vendor-plans` | Public | The three plans, merged with admin edits |
+| `PATCH` | `/vendor-plans/:planId` | Admin | Prices, limits, benefits, billing cycles, commission, grace period |
+
+- An application is linked to the account that submitted it, so an existing customer becomes a vendor without a second account and without losing orders, reviews, the wishlist, the wallet or addresses.
+- `pending` and `under_review` accounts cannot create a session at all: the better-auth `session.create.before` hook refuses every provider, so neither a password login nor a Google login issues a token.
+- Approval is one transaction: the store is created (or reused), the same user row becomes `vendor`, the application turns `approved`, and the Free period is recorded. A paid plan writes no subscription until the demo checkout succeeds.
+- Rejection keeps the account a customer, stores the reason, and lets the applicant resubmit on the same row so the reference stays stable.
+- Every plan number — price, product limit, featured limit, coupon limit, commission, grace days — is read through `vendor-plan.service`, never hard-coded in a controller or a screen.
+
 ---
 
 ## 📋 Business Rules
+
+### Vendor application lifecycle
+
+```
+registered customer ──submit──▶ pending ──admin──▶ under_review ──approve──▶ approved (role: vendor)
+                                   │                     │
+                                   └──────reject─────────┴──▶ rejected (role stays customer, can resubmit)
+                                   │
+                                   └──applicant withdraws──▶ cancelled
+```
+
+| Rule | How it is enforced |
+|---|---|
+| One open application per account | Partial unique index over `pending`, `under_review`, `approved` |
+| One store per account | `vendorstores.userId` is unique; approval reuses an existing row |
+| Unique store name and link | Checked against live applications and real stores before a submission is accepted |
+| No access while waiting | `vendorStatus` is mirrored on the user row and the session hook refuses to create a session |
+| Vendor role only on approval | The only write of `role: "vendor"` is inside the approval transaction |
+| Customer data survives conversion | Approval updates the same user document; nothing is copied or deleted |
+| A vendor may still shop | `canShop` only refuses staff and riders, so a vendor keeps its cart and wishlist |
 
 ### Order lifecycle
 

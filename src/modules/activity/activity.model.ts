@@ -18,6 +18,8 @@ export const STORE_ACTIVITY_TYPES = [
   "review",
   // A delivery was offered, accepted, declined or stopped.
   "delivery",
+  // A vendor applied, resubmitted, or changed plan.
+  "vendor",
 ] as const;
 
 /**
@@ -34,6 +36,17 @@ export const PERSONAL_ACTIVITY_TYPES = [
   "delivery_assigned",
   "delivery_update",
   "delivery_declined",
+  // The vendor side. One type per stream keeps the bell's chips readable.
+  "vendor_application",
+  "vendor_subscription",
+  "vendor_order",
+  "vendor_product",
+  "vendor_promotion",
+  "vendor_coupon",
+  "vendor_review",
+  "vendor_stock",
+  "vendor_limit",
+  "vendor_payment",
 ] as const;
 
 /** The two lists overlap on purpose, so the enum is built from the union. */
