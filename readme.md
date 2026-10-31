@@ -19,6 +19,8 @@
 2. [Architecture](#️-architecture)
 3. [API Reference](#-api-reference)
 4. [Business Rules](#-business-rules)
+   - [Vendor application lifecycle](#vendor-application-lifecycle)
+   - [Seller workspace & multi-vendor orders](#seller-workspace--multi-vendor-orders)
    - [Order lifecycle](#order-lifecycle)
    - [Loyalty points & membership](#loyalty-points--membership)
    - [Payments & transactions](#payments--transactions)
@@ -101,6 +103,7 @@ src/
 │   ├── subcategory/           subcategories under a category
 │   ├── transaction/           payment records tied to an order
 │   ├── user/                  accounts, self-service profile, data export
+│   ├── vendor/                seller workspace: applications, plans, storefront, catalogue, subscription, own orders, sales report
 │   ├── warranty/              coverage records and claims
 │   └── wishlist/              saved products
 └── utils/
@@ -285,7 +288,7 @@ Personal lines are written for the same events, from the customer's and rider's 
 | `PATCH` | `/activities/mine/read-all` | Signed in | Marks every unread line of the caller as read. `{ updated }` |
 | `PATCH` | `/activities/mine/:id/read` | Signed in | Marks one line as read; `404` when the id is not the caller's |
 
-A vendor reads this same feed once the seller workspace ships: the model already accepts the role, so no new endpoint is needed — only the seller's own screens.
+A vendor reads this same feed — the model already accepts the role, so the seller workspace needed no second endpoint. A seller marking a group ready for pickup writes a `delivery` line onto the store's shared board, which is where the team assigns the rider.
 
 ### Mail (internal)
 
@@ -327,6 +330,32 @@ The storefront keeps no mailbox of its own. When a customer clicks **Forgot pass
 - Rejection keeps the account a customer, stores the reason, and lets the applicant resubmit on the same row so the reference stays stable.
 - Every plan number — price, product limit, featured limit, coupon limit, commission, grace days — is read through `vendor-plan.service`, never hard-coded in a controller or a screen.
 
+### Seller workspace (`vendor`)
+
+Once the account is a vendor, everything else is scoped by the token. There is no `/:vendorId` route anywhere in the workspace: a seller reads and writes their own shop, catalogue, plan, orders and report, and a foreign id in a path answers `404` — the row simply is not theirs to find.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| `GET` | `/vendor-store/mine` | Vendor | The seller's own storefront row |
+| `PATCH` | `/vendor-store/mine` | Vendor | Name, description, logo, cover, contact, address, socials. `isVisible`, `isFeatured` and `status` are the store team's switches, not editable here |
+| `GET` | `/vendor-products` | Vendor | Own catalogue with per-status counts, the plan's `maxProducts` and its usage. Query: `status` (`draft`, `pending_review`, `published`, `rejected`, `archived`, `out_of_stock`, `all`), `search` over title/sku/brand, `page`, `limit` (max 100) |
+| `POST` | `/vendor-products` | Vendor | Create a listing. `publish: true` takes it live and is the branch that checks the plan limit; asking to publish with no stock leaves it `out_of_stock` |
+| `GET` | `/vendor-products/:id` | Vendor | One of the caller's own products |
+| `PATCH` | `/vendor-products/:id` | Vendor | Any own field. Only a move *into* a live status re-checks the plan limit — an edit that keeps a live listing live does not |
+| `DELETE` | `/vendor-products/:id` | Vendor | Archives the listing (`archived`, hidden). Nothing is deleted while orders, reviews and warranties still reference it |
+| `GET` | `/vendor-subscription/mine` | Vendor | The live plan, its limits, current usage, every payment and the previous period |
+| `POST` | `/vendor-subscription/checkout` | Vendor | Demo checkout for a paid plan: `planId`, `billingCycle` (`monthly`/`yearly`), `method`, optional `transactionId` and `idempotencyKey` |
+| `POST` | `/vendor-subscription/cancel-renewal` | Vendor | Turns auto-renew off; the paid period still runs to its end date |
+| `GET` | `/vendor-orders` | Vendor | The seller's fulfilment groups — see [multi-vendor orders](#seller-workspace--multi-vendor-orders). Query: `status` (one stage, or `active` / `completed` / `rejected` / `all`), `search`, `page`, `limit` (max 50) |
+| `GET` | `/vendor-orders/summary` | Vendor | `{ pending, active, completed, total }` for the overview's counters |
+| `GET` | `/vendor-orders/:id` | Vendor | One group, with the parent order's customer, payment and the live delivery/rider state |
+| `PATCH` | `/vendor-orders/:id/status` | Vendor | `accepted`, `processing`, `ready_for_shipment`, or `rejected` with a reason. `shipped` / `delivered` / `cancelled` are refused — those come from the parent order |
+| `GET` | `/vendor-analytics?range=` | Vendor | The seller's own sales report for `7`, `30`, `90` or `365` days, shortened to the window the plan allows |
+
+- No seller read ever leaves the shop's own rows: products are filtered by `vendorId`, orders by the vendor's `vendorId`, and the analytics fold only that seller's groups. A shop can never see another shop's turnover.
+- Plan limits are enforced on write, in the service, not in the screen: `assertWithinLimit` reads the live plan through `getVendorPlanState` and refuses with the headroom in the message.
+- A suspended or closed store cannot trade: `requireTradingStore` blocks catalogue writes until the store team lifts the suspension.
+
 ---
 
 ## 📋 Business Rules
@@ -350,6 +379,54 @@ registered customer ──submit──▶ pending ──admin──▶ under_rev
 | Vendor role only on approval | The only write of `role: "vendor"` is inside the approval transaction |
 | Customer data survives conversion | Approval updates the same user document; nothing is copied or deleted |
 | A vendor may still shop | `canShop` only refuses staff and riders, so a vendor keeps its cart and wishlist |
+
+### Seller workspace & multi-vendor orders
+
+A checkout that contains something from two shops is **one payment and two fulfilments**. The parent `Order` keeps everything money-shaped — the customer, the address, the totals, the transaction, the delivery — and every seller gets one `VendorOrder` row that covers only their own lines:
+
+```
+POST /orders ──▶ Order (customer · money · delivery · one status flow)
+                  ├─▶ VendorOrder  seller A · their items · their subtotal · their stage
+                  └─▶ VendorOrder  seller B · ...
+```
+
+Items with no `vendorId` are the platform's own stock: they stay on the parent order only, so an order paid entirely for platform products creates no group at all.
+
+**The seller's stages** — shorter than the parent's, and deliberately not the same list:
+
+```
+pending ──accept──▶ accepted ──▶ processing ──▶ ready_for_shipment ──▶ (the store ships it)
+    │
+    └──reject (reason required)──▶ rejected
+```
+
+| Rule | How it is enforced |
+|---|---|
+| One group per seller per order | `(orderId, vendorId)` is unique, so a replayed checkout writes no second group |
+| The seller only ever moves their own row | The status write re-reads the row with `vendorId` from the token and checks `VENDOR_TRANSITIONS` before saving — a stale tab cannot skip a stage |
+| Money stays on the parent | A group stores its own `subtotal` (a snapshot of the item titles, prices and quantities taken at checkout), never a payment state. Prices survive a later product edit |
+| Shipping, delivery and cancel are the store's | `PATCH /vendor-orders/:id/status` refuses them; they are pushed down from `PATCH /orders/:id/status` |
+| Riders are assigned per parent order | The seller marks the group ready and asks; the store team, who sees every shop's load, assigns the rider |
+| A rejected line goes back on the shelf | Rejecting restocks those quantities, exactly like a cancellation, and the reason is stored in the group's history |
+| A rejection is never silently reopened | Each parent stage carries a guard list, so a later `shipped`/`delivered` write skips a group already `rejected` |
+
+**How the two stay in step** — the split and the two sync helpers live in `vendor-order.create.ts`, the only file `order.service` and `delivery.service` import from the vendor domain, which keeps the module graph acyclic:
+
+| Parent event | Effect on the groups |
+|---|---|
+| `PATCH /orders/:id/status` → `shipped` / `delivered` / `cancelled` | Every group not already in a final or rejected stage takes that status and writes a history line saying it moved with the rest of the order — inside the same transaction |
+| A rider is assigned or reassigned (`/deliveries`) | The group copies the parent's `deliveryId` and `riderId`, so the seller's detail page shows the same rider the customer sees |
+| The seller marks `ready_for_shipment` | `pickupRequestedAt` is stamped and a `delivery` line lands on the store's shared board asking for a rider |
+
+**The seller's report** is read from those same rows, so the numbers a shop sees can only ever be its own:
+
+| Rule | How it is enforced |
+|---|---|
+| Revenue is earned on delivery | Only `delivered` groups count. `ready_for_shipment` and `shipped` are reported beside them as "on the way", never inside the total |
+| The window is capped by the plan | `analytics` level `basic`/`detailed`/`advanced` reaches 30/90/365 days; the request is answered with the range actually used, so the screen cannot advertise a range the vendor does not own |
+| Ranked products are capped too | Top 3 / 10 / 20 products by the same level |
+| Exports follow the plan's `exports` level | `limited` gets the summary and the chart data; `full` adds the per-product and per-order tables |
+| Commission is the plan's, not a guess | `vendorCommission` reads the live plan and the report shows the percentage taken, the amount and the net payout |
 
 ### Order lifecycle
 
@@ -856,6 +933,9 @@ Every rider read starts from the `riderId` in the verified token — no endpoint
 | Demo admin sandbox with daily restore | ✅ Complete |
 | Rider role, immediate role refresh and no-shopping guards | ✅ Complete |
 | Delivery model, rider job list and rider stats endpoints | ✅ Phase 2 of 7 |
+| Vendor applications, review desk, plans and billing | ✅ Complete |
+| Seller workspace — storefront, catalogue with plan limits, subscription, order board, sales report | ✅ Complete |
+| Multi-vendor checkout — one fulfilment group per seller, synced with the parent order | ✅ Complete |
 | Customer & rider notifications — in-app feed and transactional email | ✅ Complete |
 | Account data export | ✅ Complete |
 | Rate limiting, CORS allow-list, database indexes | ⏳ Planned |
@@ -872,11 +952,12 @@ Every rider read starts from the `riderId` in the verified token — no endpoint
 - [ ] **Database indexes** — compound indexes for the order, product and review query patterns.
 - [ ] **Automated tests** — unit and integration coverage per module.
 - [ ] **Real payment gateway** — Stripe / SSLCommerz / bKash, replacing the simulated wallet flow.
-- [ ] **Coupons & promo codes** — server-validated discount codes.
+- [ ] **Coupons & promo codes** — server-validated discount codes. Vendor-issued coupons are the next slice of this.
 - [ ] **Rider assignment & lifecycle** — admin assignment at `Shipped`, accept/decline, pickup to delivery, live location (Phases 3–5).
+- [ ] **Public vendor storefronts & discovery** — per-shop pages under `/shop/`, featured shops and search.
 - [ ] **"Lucky Box" rewards** — a gamified way to spend loyalty points.
 - [ ] **Multi-tenant architecture** — a `tenantId` on every collection with per-store subdomains.
-- [ ] **Store onboarding & subscription plans** — self-serve store creation and billing.
+- [x] **Store onboarding & subscription plans** — self-serve application, admin review desk, three plans with enforced limits, demo billing, and the seller's own storefront, catalogue, order board and sales report.
 - [ ] **Real-time store settings** — push changes to clients instead of polling.
 - [ ] **Chat module** — real-time messaging between customers and support.
 
