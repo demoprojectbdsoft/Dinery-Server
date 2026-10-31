@@ -9,7 +9,11 @@ import { requireStore, requireTradingStore } from "./vendor-store.service";
 import { endPlacementForProduct } from "./featured-promotion.service";
 import { slugify } from "./vendor-application.service";
 import { getVendorPlanState, assertWithinLimit } from "./vendor-subscription.service";
-import { VENDOR_PRODUCT_STATUSES } from "./vendor.types";
+import {
+  VENDOR_LIVE_PRODUCT_STATUSES,
+  VENDOR_PRODUCT_STATUSES,
+  isLiveVendorProductStatus,
+} from "./vendor.types";
 import type {
   CreateVendorProductInput,
   UpdateVendorProductInput,
@@ -25,9 +29,6 @@ import type {
  * when a draft is saved — because a vendor with a full shelf can still prepare
  * the next product and publish it after making room.
  */
-
-/** "published" and "out_of_stock" are the two statuses buyers can reach. */
-const LIVE_STATUSES = ["published", "out_of_stock"] as const;
 
 /** A slug no other product uses, derived from the title. */
 async function uniqueSlug(base: string): Promise<string> {
@@ -50,7 +51,7 @@ async function uniqueSlug(base: string): Promise<string> {
 async function syncStoreProductCount(storeId: string): Promise<void> {
   const count = await Product.countDocuments({
     storeId,
-    vendorProductStatus: { $in: [...LIVE_STATUSES] },
+    vendorProductStatus: { $in: [...VENDOR_LIVE_PRODUCT_STATUSES] },
   });
   await VendorStore.updateOne({ _id: storeId }, { $set: { productCount: count } });
 }
@@ -203,7 +204,7 @@ export async function createMyProduct(userId: string, input: CreateVendorProduct
     shippingInfo: input.shippingInfo ?? {},
   });
 
-  if (LIVE_STATUSES.includes(status as (typeof LIVE_STATUSES)[number])) {
+  if (isLiveVendorProductStatus(status)) {
     await syncStoreProductCount(String(store._id));
   }
 
@@ -241,8 +242,8 @@ export async function updateMyProduct(
     stockQuantity: stock,
   });
 
-  const wasLive = LIVE_STATUSES.includes(currentStatus as (typeof LIVE_STATUSES)[number]);
-  const willBeLive = LIVE_STATUSES.includes(nextStatus as (typeof LIVE_STATUSES)[number]);
+  const wasLive = isLiveVendorProductStatus(currentStatus);
+  const willBeLive = isLiveVendorProductStatus(nextStatus);
 
   if (!wasLive && willBeLive) {
     await assertWithinLimit(userId, "product");

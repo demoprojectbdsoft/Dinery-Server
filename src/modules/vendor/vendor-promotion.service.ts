@@ -4,6 +4,7 @@ import { Product } from "../product/product.model";
 import * as promotionService from "./featured-promotion.service";
 import { requireTradingStore } from "./vendor-store.service";
 import { assertWithinLimit } from "./vendor-subscription.service";
+import { isLiveVendorProductStatus } from "./vendor.types";
 import type { FeatureProductInput, PromotionQuery } from "./featured-promotion.validator";
 
 /**
@@ -45,8 +46,7 @@ export async function featureMyProduct(userId: string, input: FeatureProductInpu
   const store = await requireTradingStore(userId, "featuring a product");
   const product = await requireOwnProduct(userId, input.productId);
 
-  const BUYABLE = ["published", "out_of_stock"] as const;
-  if (!BUYABLE.includes(product.vendorProductStatus as (typeof BUYABLE)[number])) {
+  if (!isLiveVendorProductStatus(product.vendorProductStatus)) {
     throw new ApiError(
       400,
       `Only a listed product can be featured. "${product.title}" is ${product.vendorProductStatus}`

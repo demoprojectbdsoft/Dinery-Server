@@ -12,6 +12,7 @@ import { requireStore } from "./vendor-store.service";
 import type { CheckoutSubscriptionInput } from "./vendor-subscription.validator";
 import {
   PLAN_RANK,
+  VENDOR_LIVE_PRODUCT_STATUSES,
   billingDays,
   planPrice,
   type BillingCycle,
@@ -65,7 +66,7 @@ function addDays(date: Date, days: number): Date {
 export async function countVendorProducts(vendorId: string): Promise<number> {
   return Product.countDocuments({
     $or: [{ vendorId }, { ownerId: vendorId }],
-    vendorProductStatus: { $in: ["published", "out_of_stock"] },
+    vendorProductStatus: { $in: [...VENDOR_LIVE_PRODUCT_STATUSES] },
   });
 }
 

@@ -5,7 +5,7 @@ import { VendorStore } from "./vendor-store.model";
 import { VendorSubscription } from "./vendor-subscription.model";
 import { FeaturedPromotion, type PromotionKind } from "./featured-promotion.model";
 import { notifyVendorPromotion } from "./vendor.notifications";
-import type { VendorPlanId } from "./vendor.types";
+import { isLiveVendorProductStatus, type VendorPlanId } from "./vendor.types";
 import type { GrantPromotionInput } from "./featured-promotion.validator";
 
 /**
@@ -437,7 +437,11 @@ export async function grantByAdmin(input: GrantPromotionInput) {
     const product = await Product.findById(input.productId).lean();
     if (!product) throw new ApiError(404, "No such product");
 
-    const vendorId = String((product as any).vendorId || (product as any).ownerId || "");
+    const row = product as any;
+    // `vendorId` is what tells a seller's listing from the store's own stock: an
+    // admin-created product has an owner but no seller, and its featured flag
+    // stays the plain editorial switch on the products desk.
+    const vendorId = String(row.vendorId || "");
     if (!Types.ObjectId.isValid(vendorId)) {
       throw new ApiError(
         400,
@@ -445,14 +449,27 @@ export async function grantByAdmin(input: GrantPromotionInput) {
       );
     }
 
+    // The shop is read from the seller rather than trusted from the product, so
+    // a row cannot be pointed at somebody else's storefront.
     const store = await VendorStore.findOne({ userId: vendorId });
     if (!store) throw new ApiError(404, "That product's seller has no store on the marketplace");
+
+    // A grant obeys the same rule as a purchase: a shelf is bought on something
+    // a buyer can actually reach, or the paid-for space shows nothing.
+    if (row.isVisible === false || !isLiveVendorProductStatus(row.vendorProductStatus)) {
+      throw new ApiError(
+        400,
+        `Only a listed product can be featured. "${row.title || "This product"}" is ${
+          row.isVisible === false ? "hidden from buyers" : row.vendorProductStatus || "not on sale"
+        }`
+      );
+    }
 
     const created = await createPromotion(
       { kind: "product", productId: String(product._id), days: input.days },
       {
         vendorId,
-        storeId: String((product as any).storeId || store._id),
+        storeId: String(store._id),
         plan: await planFor(vendorId),
         source: "admin",
       }

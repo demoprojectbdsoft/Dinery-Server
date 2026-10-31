@@ -53,6 +53,20 @@ export const VENDOR_PRODUCT_STATUSES = [
 ] as const;
 export type VendorProductStatus = (typeof VENDOR_PRODUCT_STATUSES)[number];
 
+/**
+ * The two statuses a buyer can reach.
+ *
+ * The public catalogue serves exactly these, a featured placement may only be
+ * bought on these, and leaving them gives the shelf back — so the list lives
+ * here once instead of three copies that could drift apart.
+ */
+export const VENDOR_LIVE_PRODUCT_STATUSES = ["published", "out_of_stock"] as const;
+
+export const isLiveVendorProductStatus = (status?: string | null): boolean =>
+  VENDOR_LIVE_PRODUCT_STATUSES.includes(
+    status as (typeof VENDOR_LIVE_PRODUCT_STATUSES)[number]
+  );
+
 /** Paid plans are the only ones that go through the demo checkout. */
 export const VENDOR_PLAN_IDS = ["free", "premium", "advanced"] as const;
 export type VendorPlanId = (typeof VENDOR_PLAN_IDS)[number];

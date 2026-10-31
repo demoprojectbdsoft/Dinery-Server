@@ -6,6 +6,7 @@ import { ApiError } from "../../utils/apiError";
 import { idVariants } from "../../utils/ids";
 import { CreateProductInput, UpdateProductInput, GetProductsQuery } from "./product.validator";
 import type { WarrantyType } from "../warranty/warranty.types";
+import { VENDOR_LIVE_PRODUCT_STATUSES } from "../vendor/vendor.types";
 
 /** Sort keys the shop and dashboards can ask for. */
 const SORT_OPTIONS: Record<string, Record<string, 1 | -1>> = {
@@ -305,7 +306,7 @@ async function buildFilterConditions(query: GetProductsQuery) {
       {
         $or: [
           { vendorProductStatus: { $exists: false } },
-          { vendorProductStatus: { $in: ["published", "out_of_stock"] } },
+          { vendorProductStatus: { $in: [...VENDOR_LIVE_PRODUCT_STATUSES] } },
         ],
       },
     ],
@@ -392,9 +393,10 @@ export async function updateProduct(id: string, data: UpdateProductInput) {
   // A seller's product is lifted by a dated placement, never by a switch on
   // this desk: two writers of one flag would leave a shelf shining after the
   // placement that paid for it had ended. An unchanged round-trip of the edit
-  // form is not a write, so only an actual flip is refused.
-  const sellerOwner = String((current as any).vendorId || (current as any).ownerId || "");
-  if (data.isFeatured !== undefined && sellerOwner && data.isFeatured !== Boolean(current.isFeatured)) {
+  // form is not a write, so only an actual flip is refused. The store's own
+  // stock has no seller behind it and keeps the plain editorial switch.
+  const sellerOwned = Boolean((current as any).vendorId || (current as any).storeId);
+  if (data.isFeatured !== undefined && sellerOwned && data.isFeatured !== Boolean(current.isFeatured)) {
     throw new ApiError(
       400,
       "A seller's product is featured from the promotions desk, where the placement carries an end date."

@@ -225,7 +225,7 @@ A placement is a dated row, not a checkbox. `FeaturedPromotion` records who boug
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | `GET` | `/promotions` | Admin | Every placement or one seller's (`vendorId`), filterable by `kind` (`product` / `store` / `all`) and `status` (`live` / `ended` / `cancelled` / `all`); paginated, with a count per state. Each row carries the product, the shop and the seller's name, so a board of everyone's placements reads without a second call |
-| `POST` | `/promotions` | Admin | Grant a placement: `kind` plus `productId` or `vendorId`, `days` (1–365, default 30) and an optional `reason` the seller reads. The shop it belongs to is read from the row being lifted, never sent |
+| `POST` | `/promotions` | Admin | Grant a placement: `kind` plus `productId` or `vendorId`, `days` (1–365, default 30) and an optional `reason` the seller reads. The shop it belongs to is read from the row being lifted, never sent. A listing a buyer cannot reach, or stock the store owns itself, is refused with the reason |
 | `DELETE` | `/promotions/:id` | Admin | End a placement early with the reason. Nothing is deleted — the row stays so the desk can say what ran and why it stopped |
 | `GET` | `/promotions/expire` | Cron / Admin | The daily sweep: closes every placement past `endsAt` and dims what it lifted |
 | `GET` | `/vendor-promotions` | Vendor | The seller's own placements, same filters and per-state counts |
@@ -597,9 +597,11 @@ Being featured is bought, not claimed. One collection holds both kinds of placem
 | **State is read against the clock** | `live` / `ended` / `cancelled` comes from the row's status *and* `endsAt`, so a desk is truthful even before the sweep has run. |
 | **The sweep dims what lapsed** | `/promotions/expire` closes every placement past its date and turns its switch off. Vercel Cron runs it daily; an admin can run the same route by hand. |
 | **Unbuyable means unfeatured** | Archiving a listing, or moving it out of a buyable status or hiding it, ends the placement with the reason written on the row — the shelf is given back rather than left showing something nobody can reach. |
+| **A grant obeys the same rule as a purchase** | The board cannot lift a draft, a rejected, an archived or a hidden listing either. "Buyers can reach this" is one pair of statuses — the same list the public catalogue serves, the seller's desk buys on and the store's product counter counts — held once in `vendor.types.ts` so those four readings cannot drift. |
+| **The board cannot lift the store's own stock** | A product with no `vendorId` belongs to the platform, has no dated placement behind it and keeps the plain editorial switch on the products desk; a grant on it is refused with that pointer. |
 | **A dead plan clears the board** | When a period expires — on read, or by `/vendor-subscription/expire` — every placement it paid for ends. The shop keeps its products, orders and coupons. |
 | **A grant is not billed** | `featuredProducts` counts the placements the shop bought (`source: "subscription"`). A favour from the store team lifts a product without eating a slot somebody paid for. |
-| **Only the store's own goods keep a hand switch** | Flipping `isFeatured` on the products desk is refused for a seller's product with a pointer to the promotions board, because that flag needs an end date. Store-owned products keep the plain editorial switch. |
+| **Only the store's own goods keep a hand switch** | Flipping `isFeatured` on the products desk is refused for a seller's product with a pointer to the promotions board, because that flag needs an end date. A product is told as a seller's by `vendorId` / `storeId`, so the store's own stock keeps the plain editorial switch. |
 | **Rows are closed, never deleted** | Cancelling keeps the placement so the desk can say what ran, for how long and why it stopped — which is also how a seller learns that a grant was withdrawn. |
 
 ### Payments & transactions
