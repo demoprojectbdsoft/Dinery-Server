@@ -28,6 +28,7 @@ import vendorPlanRoutes from "./modules/vendor/vendor-plan.route";
 import vendorStoreRoutes from "./modules/vendor/vendor-store.route";
 import vendorProductRoutes from "./modules/vendor/vendor-product.route";
 import vendorSubscriptionRoutes from "./modules/vendor/vendor-subscription.route";
+import vendorOrderRoutes from "./modules/vendor/vendor-order.route";
 import { errorMiddleware } from "./middlewares/error.middleware";
 import { notFound } from "./middlewares/notFound.middleware";
 
@@ -71,6 +72,7 @@ app.use("/api/vendor-plans", vendorPlanRoutes);
 app.use("/api/vendor-store", vendorStoreRoutes);
 app.use("/api/vendor-products", vendorProductRoutes);
 app.use("/api/vendor-subscription", vendorSubscriptionRoutes);
+app.use("/api/vendor-orders", vendorOrderRoutes);
 app.use("/api/demo", demoRoutes);
 
 app.use(notFound);

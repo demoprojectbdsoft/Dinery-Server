@@ -12,6 +12,7 @@ import { Order } from "../order/order.model";
 import { SiteSettings } from "../site-settings/site-settings.model";
 import { ApiError } from "../../utils/apiError";
 import { updateOrderStatus } from "../order/order.service";
+import { syncVendorOrdersForDelivery } from "../vendor/vendor-order.create";
 import { recordActivity, notifyUser } from "../activity/activity.service";
 import {
   notifyAdminDeliveryEmail,
@@ -508,7 +509,7 @@ async function createAssignment(params: {
     0
   );
 
-  return Delivery.create({
+  const delivery = await Delivery.create({
     orderId: order._id,
     riderId: new Types.ObjectId(riderId),
     assignedBy: adminId ? new Types.ObjectId(adminId) : null,
@@ -531,6 +532,12 @@ async function createAssignment(params: {
       },
     ],
   });
+
+  // The seller rows follow the parent's job, so a vendor sees the same rider
+  // the customer does without a second assignment of its own.
+  await syncVendorOrdersForDelivery(order._id, delivery._id, delivery.riderId);
+
+  return delivery;
 }
 
 /** The email and in-app line that reach the rider. */

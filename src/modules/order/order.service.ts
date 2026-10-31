@@ -23,6 +23,7 @@ import {
   notifyOrderStatusChanged,
 } from "../activity/activity.notifications";
 import { ACTIVE_DELIVERY_STATUSES, Delivery, LIVE_DELIVERY_STATUSES } from "../delivery/delivery.model";
+import { createVendorOrdersForOrder, syncVendorOrdersForParentStatus } from "../vendor/vendor-order.create";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -114,6 +115,10 @@ async function buildOrderItems(items: CreateOrderInput["items"]) {
     subtotal += product.price * item.quantity;
     orderItems.push({
       productId: product._id,
+      // The seller this line belongs to, copied now so a later product edit
+      // cannot move a past order to another store.
+      vendorId: product.vendorId || null,
+      storeId: product.storeId || null,
       title:     product.title,
       price:     product.price,
       quantity:  item.quantity,
@@ -396,6 +401,10 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
     // A new order always enters the flow at "confirmed".
     await logOrderStatus(orderId, "confirmed", { session });
 
+    // One row per seller, inside the same unit of work: the customer pays for
+    // one checkout, each seller gets their own fulfilment record from it.
+    await createVendorOrdersForOrder(order, session);
+
     for (const item of data.items) {
       // A product saved with no stock quantity is not stock-tracked, so it has
       // no number to lower. The filter skips those rows; without it `$inc`
@@ -658,6 +667,10 @@ export async function updateOrderStatus(
     statusChanged = true;
 
     await logOrderStatus(id, data.orderStatus, { session, changedBy });
+
+    // The seller rows carry the same shipping stage, so a vendor's board never
+    // keeps saying "ready" after the parcel has left the store.
+    await syncVendorOrdersForParentStatus(id, data.orderStatus, session ?? undefined);
 
     // Settle the side effects of the new status. These need the *previous*
     // status, which is why the original document is kept around.

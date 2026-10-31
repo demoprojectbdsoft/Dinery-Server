@@ -3,6 +3,13 @@ import { Schema, model } from "mongoose";
 const orderItemSchema = new Schema(
   {
     productId: { type: Schema.Types.ObjectId, ref: "Product", required: true },
+    /**
+     * Copied from the product at checkout. Empty means platform stock; a value
+     * means this line belongs to that seller, and the vendor order split reads
+     * exactly this field.
+     */
+    vendorId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    storeId: { type: Schema.Types.ObjectId, ref: "VendorStore", default: null },
     title: { type: String, required: true },
     price: { type: Number, required: true },
     quantity: { type: Number, required: true },
