@@ -69,8 +69,9 @@ const activitySchema = new Schema(
     // ── Personal line ────────────────────────────────────────────────────────
     // The one person this line is for. Empty means it belongs to the store feed.
     userId: { type: Schema.Types.ObjectId, ref: "User", default: null, index: true },
-    // Which side of the app the line is written for.
-    role: { type: String, enum: ["customer", "rider", "admin"], default: null },
+    // Which side of the app the line is written for. "vendor" is already
+    // accepted so the seller add-on can be notified without a schema change.
+    role: { type: String, enum: ["customer", "rider", "vendor", "admin"], default: null },
     // When its owner opened it. Empty until they do.
     readAt: { type: Date, default: null },
 

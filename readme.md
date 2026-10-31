@@ -270,9 +270,9 @@ The contact page writes here; the admin reads it. Creating is not a public endpo
 | `POST` | `/messages/:id/reply` | Admin | Emails the visitor. Body: `subject`, `message`. The address is read from the stored message, never from the body |
 | `DELETE` | `/messages/:id` | Admin | |
 
-### Activity feed & notifications
+### Notifications
 
-One collection, two audiences. A line with no `userId` belongs to the store team's shared feed; a line with a `userId` is addressed to one customer or rider and carries its own read state. Keeping both in one place means what a customer is told and what the store sees can never drift apart.
+One collection, one feed, every role. A line with no `userId` belongs to the store team's shared board; a line with a `userId` is addressed to one account and carries its own read state. Keeping both in one place — and behind one endpoint — means what a customer is told and what the store sees can never drift apart, and there is no second feed to keep in step.
 
 Store lines are written by the API itself the moment something happens — never seeded, mocked or back-filled — one row per new order, recorded payment, delivered order's warranties, customer cancellation, new or deleted account, contact message, and a review being written or edited. A row stores what changed plus the value the matching screen searches by (an order id, an account id, a review id or an email); the app builds the route, so an old line still opens the right page after a rename.
 
@@ -280,11 +280,12 @@ Personal lines are written for the same events, from the customer's and rider's 
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `GET` | `/activities` | Admin | Store feed, newest first. Query: `limit` 1–30 (default 8). Answers `{ activities, serverTime }` — `serverTime` is the API clock at the moment of the answer, so the app can write "3m ago" without trusting the visitor's system clock. Rows delete themselves after 30 days |
-| `GET` | `/activities/mine` | Signed in | The caller's own lines, newest first. Query: `page`, `limit` 1–100 (default 20), `unread` (`true`). Answers `{ notifications, total, unreadCount, serverTime, pagination }`. The user id comes from the token, never from the query |
+| `GET` | `/activities/mine` | Signed in | **The one feed.** The role is read from the token, never from the query: an `admin` or `demo admin` gets the shared store board (the rows with no owner), everybody else the rows addressed to them. Query: `page`, `limit` 1–100 (default 20), `search` (matched against the title and the detail), `type` (comma-separated, for the chips), `sort` (`newest`, `oldest`, `unread` — the last one only means something to a personal list), `unread` (`true`). Answers `{ lines, total, unreadCount, typeCounts, shared, serverTime, pagination }`. `shared` says which read mark applies — a shared board is marked on the device, because one admin's read must not clear the whole team's — and `typeCounts` counts every chip under the current search. `serverTime` is the API clock at the moment of the answer, so the app can write "3m ago" without trusting the visitor's system clock. Rows delete themselves after 30 days |
 | `GET` | `/activities/mine/unread-count` | Signed in | `{ unreadCount }`, for the bell |
 | `PATCH` | `/activities/mine/read-all` | Signed in | Marks every unread line of the caller as read. `{ updated }` |
 | `PATCH` | `/activities/mine/:id/read` | Signed in | Marks one line as read; `404` when the id is not the caller's |
+
+A vendor reads this same feed once the seller workspace ships: the model already accepts the role, so no new endpoint is needed — only the seller's own screens.
 
 ### Mail (internal)
 
@@ -782,7 +783,7 @@ The `rider` role and the delivery domain are being added in seven phases, withou
 - **Roles** — `admin`, `customer`, `rider`, `vendor`. `PATCH /api/users/:id` accepts the new roles; `requireAuth` re-reads the role from the database after a JWT check so a promotion or demotion applies on the next request.
 - **No shopping** — `assertShopper` refuses cart, wishlist and review writes for admin, demo admin, rider and vendor accounts.
 - **Ownership** — every rider endpoint will scope the query to the caller's token, never a body-supplied rider id.
-- **Notifications** — the same `activities` collection carries the store feed and each person's own lines; `GET /activities/mine` reads only the caller's, and the order service writes the customer copy next to every stage change.
+- **Notifications** — the same `activities` collection carries the store's shared board and each person's own lines, and the same `GET /activities/mine` serves both: the role in the token decides which list "mine" is. The order service writes the customer copy next to every stage change.
 - **Tracking transport** — the API stores only the latest rider position per delivery; the customer page polls it every 8 seconds (Vercel serverless friendly), and optional Ably keys publish the same message for instant updates.
 - **Delivery model** — one `deliveries` collection: `orderId`, `riderId`, `assignedBy`, `status`, a denormalised customer/address copy, `fee`, `distanceKm`, `declineReason`, `expiresAt` and an append-only `history`. A partial unique index on `orderId` covers the active statuses, so an order can never have two live assignments.
 - **Statuses** — `assigned`, `accepted`, `picked_up`, `out_for_delivery`, `delivered`, `cancelled`, `declined`. The lists accept the shortcuts `active` (`accepted`, `picked_up`, `out_for_delivery`) and `finished` (`delivered`, `cancelled`, `declined`).
@@ -794,7 +795,7 @@ The `rider` role and the delivery domain are being added in seven phases, withou
 
 Every rider read starts from the `riderId` in the verified token — no endpoint takes a rider id from the request.
 
-**Progress:** Phase 1 ✅ roles, RBAC and no-shopping rules. Notifications ✅ in-app + email for customers and riders. Phase 2 ✅ delivery model, `GET /api/deliveries` and `GET /api/deliveries/stats`. Assignment, the lifecycle, tracking and OTP follow in Phases 3–7.
+**Progress:** Phase 1 ✅ roles, RBAC and no-shopping rules. Notifications ✅ one feed for every role, in-app + email. Phase 2 ✅ delivery model, `GET /api/deliveries` and `GET /api/deliveries/stats`. Assignment, the lifecycle, tracking and OTP follow in Phases 3–7.
 
 ---
 

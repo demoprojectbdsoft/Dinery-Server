@@ -1,12 +1,13 @@
-import { Types } from "mongoose";
+import { Types, type SortOrder } from "mongoose";
 import { Activity, STORE_ACTIVITY_TYPES, PERSONAL_ACTIVITY_TYPES } from "./activity.model";
 import { ApiError } from "../../utils/apiError";
-import { GetNotificationsQuery } from "./activity.validator";
+import { GetFeedQuery } from "./activity.validator";
+import { isAdminRole } from "../../utils/roles";
 
 export type StoreActivityType = (typeof STORE_ACTIVITY_TYPES)[number];
 export type PersonalActivityType = (typeof PERSONAL_ACTIVITY_TYPES)[number];
 export type ActivityType = StoreActivityType | PersonalActivityType;
-export type NotificationRole = "customer" | "rider" | "admin";
+export type NotificationRole = "customer" | "rider" | "vendor" | "admin";
 
 export interface NewActivity {
   type: StoreActivityType;
@@ -22,6 +23,49 @@ export interface NewNotification {
   title: string;
   detail?: string;
   ref?: string;
+}
+
+/** Who is reading the feed: the id decides which lines, the role which list. */
+export interface Requester {
+  id: string;
+  role?: string | null;
+}
+
+/** Every type a feed can hold, so a chip naming an unknown value is ignored. */
+const KNOWN_TYPES = new Set<string>([...STORE_ACTIVITY_TYPES, ...PERSONAL_ACTIVITY_TYPES]);
+
+/** Escapes a search term, so "a+b" is matched literally instead of as a regex. */
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The known types named in a comma-separated `type`, unknown ones dropped. */
+function parseTypes(type?: string): string[] {
+  if (!type) return [];
+  return type
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value && KNOWN_TYPES.has(value));
+}
+
+/** `title` or `detail` containing the search term, case-insensitively. */
+function searchFilter(search?: string): Record<string, unknown> | null {
+  if (!search) return null;
+  const match = new RegExp(escapeRegex(search), "i");
+  return { $or: [{ title: match }, { detail: match }] };
+}
+
+/** How many lines of each type a base filter would hold, for the filter chips. */
+async function countByType(base: Record<string, unknown>): Promise<Record<string, number>> {
+  const rows = await Activity.aggregate<{ _id: string; count: number }>([
+    { $match: base },
+    { $group: { _id: "$type", count: { $sum: 1 } } },
+  ]);
+
+  return rows.reduce<Record<string, number>>((counts, row) => {
+    counts[String(row._id)] = Number(row.count) || 0;
+    return counts;
+  }, {});
 }
 
 // ─── Store feed ───────────────────────────────────────────────────────────────
@@ -46,21 +90,12 @@ export async function recordActivity(data: NewActivity): Promise<void> {
 }
 
 /**
- * The newest store lines first, which is the order the bell shows them in.
- * Lines addressed to one person are filtered out: they belong in that person's
- * own feed, not in the store-wide one.
- */
-export async function getActivities(limit: number) {
-  return Activity.find({ userId: null }).sort({ createdAt: -1, _id: -1 }).limit(limit).lean();
-}
-
-// ─── Personal feed ────────────────────────────────────────────────────────────
-
-/**
- * Writes one activity line for a single customer or rider.
+ * Writes one line for a single account.
  *
- * It never throws: a notification is a side note, so a failed write must not
- * turn a completed delivery or a placed order into an error the caller sees.
+ * Same collection, same shape — only the row carries an owner, which is what
+ * makes it a notification instead of a note on the shared board. It never
+ * throws either: a notification is a side note, so a failed write must not turn
+ * a completed delivery or a placed order into an error the caller sees.
  */
 export async function notifyUser(data: NewNotification): Promise<void> {
   try {
@@ -77,27 +112,63 @@ export async function notifyUser(data: NewNotification): Promise<void> {
   }
 }
 
-/** The caller's own lines, newest first. */
-export async function getNotifications(userId: string, query: GetNotificationsQuery) {
-  const { page, limit, unread } = query;
-  const owner = { userId: new Types.ObjectId(userId) };
-  const filter: Record<string, unknown> = { ...owner };
-  if (unread === "true") filter.readAt = null;
+/**
+ * One page of "what happened", for whoever is asking.
+ *
+ * Every role reads this same feed. The store team's copy is the shared list —
+ * the lines with no owner — and everybody else reads the lines addressed to
+ * them. That is the only difference: the search, the type chips, the order, the
+ * unread switch and the pager are the same for all four roles.
+ *
+ * `shared` tells the app which read mark applies. A shared line's dot lives on
+ * the device, because one admin's read must not clear the whole team's; a
+ * personal line's dot is the server's `readAt`, so it clears everywhere.
+ */
+export async function getFeed(requester: Requester, query: GetFeedQuery) {
+  const shared = isAdminRole(requester.role);
+  const { page, limit, unread, search, sort } = query;
+  const types = parseTypes(query.type);
 
-  const [notifications, total, unreadCount] = await Promise.all([
-    Activity.find(filter)
-      .sort({ createdAt: -1, _id: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean(),
+  // A shared line has no owner; a personal one is found by the token's own id.
+  const owner: Record<string, unknown> = shared
+    ? { userId: null }
+    : { userId: new Types.ObjectId(requester.id) };
+
+  const filter: Record<string, unknown> = { ...owner };
+  if (!shared && unread === "true") filter.readAt = null;
+  if (types.length) filter.type = { $in: types };
+  const text = searchFilter(search);
+  if (text) filter.$or = text.$or;
+
+  // The chips count everything the search allows except the type itself, so a
+  // chip's number says what pressing it would show.
+  const countBase: Record<string, unknown> = { ...owner };
+  if (!shared && unread === "true") countBase.readAt = null;
+  if (text) countBase.$or = text.$or;
+
+  const order: Record<string, SortOrder> =
+    sort === "oldest"
+      ? { createdAt: 1, _id: 1 }
+      : sort === "unread" && !shared
+        ? // Empty `readAt` sorts first, so the dots gather at the top; within
+          // each group the newest line still leads.
+          { readAt: 1, createdAt: -1, _id: -1 }
+        : { createdAt: -1, _id: -1 };
+
+  const [lines, total, unreadCount, typeCounts] = await Promise.all([
+    Activity.find(filter).sort(order).skip((page - 1) * limit).limit(limit).lean(),
     Activity.countDocuments(filter),
-    Activity.countDocuments({ ...owner, readAt: null }),
+    // A shared list has no per-person read state, so the app counts its own dots.
+    shared ? Promise.resolve(0) : Activity.countDocuments({ ...owner, readAt: null }),
+    countByType(countBase),
   ]);
 
   return {
-    notifications,
+    lines,
     total,
     unreadCount,
+    typeCounts,
+    shared,
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   };
 }
