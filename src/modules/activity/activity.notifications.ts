@@ -255,6 +255,12 @@ export async function notifyRiderAssigned(riderId: string, info: RiderAssignment
 export async function notifyCustomerDelivery(params: {
   userId: string;
   deliveryId: string;
+  /**
+   * The order behind the delivery. When it is given the line opens the live
+   * tracking page, which is the only screen that shows the rider's position and
+   * the code to read at the door.
+   */
+  orderId?: string;
   orderNumber: string;
   title: string;
   detail?: string;
@@ -268,7 +274,7 @@ export async function notifyCustomerDelivery(params: {
       type: "delivery_update",
       title: `${params.title} ${params.orderNumber}`,
       detail: params.detail || "",
-      ref: params.deliveryId,
+      ref: params.orderId || params.deliveryId,
     });
 
     if (!params.emailHeading) return;
@@ -282,8 +288,10 @@ export async function notifyCustomerDelivery(params: {
       intro: params.detail,
       orderNumber: params.orderNumber,
       rows: params.emailRows,
-      actionLabel: "Track your order",
-      actionPath: "/dashboard/customer/orders",
+      actionLabel: params.orderId ? "Track your delivery" : "View your orders",
+      actionPath: params.orderId
+        ? `/track-order/${params.orderId}`
+        : "/dashboard/customer/orders",
       brand,
     });
   } catch (err) {

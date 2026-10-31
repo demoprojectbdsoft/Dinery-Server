@@ -678,9 +678,10 @@ export async function reassignDelivery(
   await notifyCustomerDelivery({
     userId: String(order.userId),
     deliveryId: String(replacement._id),
+    orderId: String(order._id),
     orderNumber: shortOrderNumber(order._id),
     title: "A new rider is bringing your order",
-    detail: "Your delivery was handed to another rider. Track it from your orders.",
+    detail: "Your delivery was handed to another rider. Follow it live from your tracking page.",
   });
 
   await announceAssignment(replacement);
@@ -869,9 +870,10 @@ export async function advanceDelivery(riderId: string, id: string, input: RiderS
       await notifyCustomerDelivery({
         userId: String(order.userId),
         deliveryId: String(updated._id),
+        orderId: String(updated.orderId),
         orderNumber,
         title: "Out for delivery",
-        detail: `${(updated.riderId as any)?.name || "Your rider"} is on the way. Your delivery code is waiting in your orders.`,
+        detail: `${(updated.riderId as any)?.name || "Your rider"} is on the way. Your delivery code and their live position are on your tracking page.`,
         emailHeading: "Your order is out for delivery",
         emailRows: [
           { label: "Rider", value: (updated.riderId as any)?.name },
@@ -907,6 +909,7 @@ export async function advanceDelivery(riderId: string, id: string, input: RiderS
       await notifyCustomerDelivery({
         userId: String(order.userId),
         deliveryId: String(updated._id),
+        orderId: String(updated.orderId),
         orderNumber,
         title: "Your delivery was cancelled",
         detail: "The store will assign another rider. Your order is unchanged.",
@@ -975,6 +978,7 @@ export async function completeDelivery(riderId: string, id: string, code: string
     await notifyCustomerDelivery({
       userId: String(order.userId),
       deliveryId: String(updated._id),
+      orderId: String(updated.orderId),
       orderNumber,
       title: "Delivered",
       detail: "Your delivery code was confirmed. Thanks for shopping with us.",
@@ -1174,6 +1178,7 @@ export async function cancelDeliveryByAdmin(
     await notifyCustomerDelivery({
       userId: String(order.userId),
       deliveryId: String(updated._id),
+      orderId: String(updated.orderId),
       orderNumber,
       title: "Your delivery was cancelled",
       detail: "The store will contact you about a new delivery.",
