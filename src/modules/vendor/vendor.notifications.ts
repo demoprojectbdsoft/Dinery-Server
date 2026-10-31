@@ -72,3 +72,25 @@ export async function notifyAdminVendorSubscription(params: {
     ref: params.subscriptionId,
   });
 }
+
+/**
+ * A featured placement the seller did not choose themselves.
+ *
+ * Only the store team's grant and revoke use this: a seller who pinned their own
+ * product just pressed the button and needs no line in their bell about it.
+ */
+export async function notifyVendorPromotion(params: {
+  userId: string;
+  title: string;
+  detail?: string;
+  promotionId: string;
+}) {
+  await notifyUser({
+    userId: params.userId,
+    role: "vendor",
+    type: "vendor_promotion",
+    title: params.title,
+    detail: params.detail || "",
+    ref: params.promotionId,
+  });
+}

@@ -28,3 +28,15 @@ export const cancelSubscriptionRenewal = catchAsync(async (req, res) => {
   const subscription = await subscriptionService.cancelRenewal(req.user!.id);
   apiResponse(res, 200, subscription, "Renewal cancelled; the current period still runs");
 });
+
+/**
+ * Closes every period that has run past its grace window.
+ *
+ * A vendor who never opens their dashboard after midnight still has a row that
+ * reads `active`, so this sweep exists for the shops nobody is looking at. It
+ * also dims whatever their expired plan had bought on the featured shelves.
+ */
+export const expireSubscriptions = catchAsync(async (_req, res) => {
+  const result = await subscriptionService.expireDueSubscriptions();
+  apiResponse(res, 200, result, "Lapsed periods closed");
+});

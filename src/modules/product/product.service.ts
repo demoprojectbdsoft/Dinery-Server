@@ -389,6 +389,18 @@ export async function updateProduct(id: string, data: UpdateProductInput) {
     data.specifications ?? current.specifications
   );
 
+  // A seller's product is lifted by a dated placement, never by a switch on
+  // this desk: two writers of one flag would leave a shelf shining after the
+  // placement that paid for it had ended. An unchanged round-trip of the edit
+  // form is not a write, so only an actual flip is refused.
+  const sellerOwner = String((current as any).vendorId || (current as any).ownerId || "");
+  if (data.isFeatured !== undefined && sellerOwner && data.isFeatured !== Boolean(current.isFeatured)) {
+    throw new ApiError(
+      400,
+      "A seller's product is featured from the promotions desk, where the placement carries an end date."
+    );
+  }
+
   const product = await Product.findByIdAndUpdate(id, data, { new: true });
   if (!product) throw new ApiError(404, "Product not found");
   return formatProduct(product);

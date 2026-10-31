@@ -7,7 +7,7 @@ import type {
   CreateCouponInput,
   UpdateCouponInput,
 } from "../coupon/coupon.validator";
-import { requireStore } from "./vendor-store.service";
+import { requireTradingStore } from "./vendor-store.service";
 import { assertWithinLimit } from "./vendor-subscription.service";
 
 /**
@@ -23,20 +23,6 @@ import { assertWithinLimit } from "./vendor-subscription.service";
  * another shop's goods or the platform's own stock, the discount the checkout
  * computes is limited to this seller's lines.
  */
-
-const BLOCKED_STORE_STATUSES = ["suspended", "closed"] as const;
-
-/** A shop that cannot trade cannot advertise new codes either. */
-async function requireTradingStore(userId: string) {
-  const store = await requireStore(userId);
-  if (BLOCKED_STORE_STATUSES.includes(store.status as (typeof BLOCKED_STORE_STATUSES)[number])) {
-    throw new ApiError(
-      403,
-      `This store is ${store.status}. Contact the store team before running coupons.`
-    );
-  }
-  return store;
-}
 
 /**
  * A coupon may only point at the seller's own products.
@@ -68,7 +54,7 @@ export async function getMyCoupon(userId: string, id: string) {
 }
 
 export async function createMyCoupon(userId: string, input: CreateCouponInput) {
-  const store = await requireTradingStore(userId);
+  const store = await requireTradingStore(userId, "running coupons");
   await assertProductsAreOwn(userId, input.productIds);
   await assertWithinLimit(userId, "coupon");
 

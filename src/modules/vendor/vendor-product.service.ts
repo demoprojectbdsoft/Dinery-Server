@@ -5,7 +5,8 @@ import { formatProduct } from "../product/product.service";
 import { Category } from "../category/category.model";
 import { SubCategory } from "../subcategory/subcategory.model";
 import { VendorStore } from "./vendor-store.model";
-import { requireStore } from "./vendor-store.service";
+import { requireStore, requireTradingStore } from "./vendor-store.service";
+import { endPlacementForProduct } from "./featured-promotion.service";
 import { slugify } from "./vendor-application.service";
 import { getVendorPlanState, assertWithinLimit } from "./vendor-subscription.service";
 import { VENDOR_PRODUCT_STATUSES } from "./vendor.types";
@@ -27,19 +28,6 @@ import type {
 
 /** "published" and "out_of_stock" are the two statuses buyers can reach. */
 const LIVE_STATUSES = ["published", "out_of_stock"] as const;
-const BLOCKED_STORE_STATUSES = ["suspended", "closed"] as const;
-
-/** A store that cannot trade cannot add products either. */
-async function requireTradingStore(userId: string) {
-  const store = await requireStore(userId);
-  if (BLOCKED_STORE_STATUSES.includes(store.status as (typeof BLOCKED_STORE_STATUSES)[number])) {
-    throw new ApiError(
-      403,
-      `This store is ${store.status}. Contact the store team before adding products.`
-    );
-  }
-  return store;
-}
 
 /** A slug no other product uses, derived from the title. */
 async function uniqueSlug(base: string): Promise<string> {
@@ -172,7 +160,7 @@ export async function getMyProduct(userId: string, productId: string) {
  * without a recount on read.
  */
 export async function createMyProduct(userId: string, input: CreateVendorProductInput) {
-  const store = await requireTradingStore(userId);
+  const store = await requireTradingStore(userId, "listing products");
   await assertCategory(input.categoryId, input.subCategoryIds);
 
   const publish = Boolean(input.publish);
@@ -235,7 +223,7 @@ export async function updateMyProduct(
   input: UpdateVendorProductInput
 ) {
   const product = await requireOwnedProduct(userId, productId);
-  const store = await requireTradingStore(userId);
+  const store = await requireTradingStore(userId, "editing a listing");
 
   if (input.categoryId || input.subCategoryIds) {
     await assertCategory(
@@ -316,6 +304,12 @@ export async function updateMyProduct(
   Object.assign(product, update);
   await product.save();
 
+  // A listing nobody can reach has no business holding a featured shelf, so the
+  // placement is closed and the slot given back rather than left glowing.
+  if (!willBeLive || product.isVisible === false) {
+    await endPlacementForProduct(String(product._id), "The listing is no longer on sale");
+  }
+
   await syncStoreProductCount(String(store._id));
   return formatProduct(product);
 }
@@ -328,6 +322,9 @@ export async function archiveMyProduct(userId: string, productId: string) {
   product.vendorProductStatus = "archived";
   product.isVisible = false;
   await product.save();
+
+  // The shelf goes with the listing, and the row says why it went quiet.
+  await endPlacementForProduct(String(product._id), "The listing was archived");
 
   await syncStoreProductCount(String(store._id));
   return formatProduct(product);

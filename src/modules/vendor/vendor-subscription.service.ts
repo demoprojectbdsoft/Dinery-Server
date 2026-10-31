@@ -4,6 +4,7 @@ import { withTransaction } from "../../utils/transactions";
 import { Product } from "../product/product.model";
 import { Coupon } from "../coupon/coupon.model";
 import { FeaturedPromotion } from "./featured-promotion.model";
+import { endPromotionsForVendor } from "./featured-promotion.service";
 import { SubscriptionPlan } from "./subscription-plan.model";
 import { SubscriptionTransaction, VendorSubscription } from "./vendor-subscription.model";
 import { getPlan, commissionForPlan } from "./vendor-plan.service";
@@ -69,10 +70,14 @@ export async function countVendorProducts(vendorId: string): Promise<number> {
 }
 
 async function countFeatured(vendorId: string): Promise<number> {
+  // Only placements the shop bought fill its allowance. A grant from the store
+  // team lifts a product without eating a slot somebody paid for, so it is
+  // counted on the board but not against the plan.
   return FeaturedPromotion.countDocuments({
     vendorId,
     kind: "product",
     status: "active",
+    source: "subscription",
     endsAt: { $gt: new Date() },
   });
 }
@@ -137,6 +142,12 @@ export async function getLiveSubscription(vendorId: string) {
       }
     }
     await row.save();
+
+    // The plan that paid for the featured shelves has ended with this row, so
+    // nothing it bought stays lit while the daily sweep is still on its way.
+    if (row.status === "expired") {
+      await endPromotionsForVendor(String(row.vendorId), "Subscription ended");
+    }
   }
 
   return null;
@@ -415,11 +426,9 @@ export async function expireDueSubscriptions() {
     await row.save();
     expired += 1;
 
-    // Expired promotions stop being featured; the products themselves stay.
-    await FeaturedPromotion.updateMany(
-      { vendorId: row.vendorId, status: "active" },
-      { $set: { status: "expired", endedAt: now, endedReason: "Subscription ended" } }
-    );
+    // Expired placements stop being featured and dim what they lifted; the
+    // products themselves stay exactly as the seller left them.
+    await endPromotionsForVendor(String(row.vendorId), "Subscription ended");
   }
 
   return { expired };

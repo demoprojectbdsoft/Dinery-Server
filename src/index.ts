@@ -6,6 +6,8 @@ import cron from "node-cron";
 import { restoreDemoChanges } from "./modules/demo/demo.service";
 import { expireStaleWarranties } from "./modules/warranty/warranty.service";
 import { expireStaleDeliveries } from "./modules/delivery/delivery.service";
+import { expireDueSubscriptions } from "./modules/vendor/vendor-subscription.service";
+import { expireDuePromotions } from "./modules/vendor/featured-promotion.service";
 
 async function startServer() {
   await connectDB();
@@ -60,9 +62,46 @@ async function startServer() {
     { timezone }
   );
 
+  // Each job keeps its own schedule so one failing sweep can never skip another.
+  // A period is closed before the shelves are dimmed, because ending a plan also
+  // ends the placements it bought.
+  cron.schedule(
+    "45 0 * * *",
+    async () => {
+      try {
+        const result = await expireDueSubscriptions();
+        if (result.expired > 0) {
+          console.log("[CRON] ⏳ Lapsed vendor periods closed:", result.expired);
+        }
+      } catch (err) {
+        console.error("[CRON] ❌ Failed to expire vendor subscriptions:", err);
+      }
+    },
+    { timezone }
+  );
+
+  // Featured placements past their date come off the shelves, and whatever they
+  // lifted stops reading as featured. Also exposed as GET /api/promotions/expire.
+  cron.schedule(
+    "0 1 * * *",
+    async () => {
+      try {
+        const result = await expireDuePromotions();
+        if (result.expired > 0) {
+          console.log("[CRON] ⏳ Lapsed featured placements closed:", result.expired);
+        }
+      } catch (err) {
+        console.error("[CRON] ❌ Failed to expire featured placements:", err);
+      }
+    },
+    { timezone }
+  );
+
   app.listen(ENV.PORT, () => {
     console.log(`Server running on port ${ENV.PORT}`);
-    console.log(`[CRON] Daily demo restore scheduled for 12:00 AM, warranty expiry for 12:30 AM`);
+    console.log(
+      `[CRON] Demo restore 12:00 AM · warranties 12:30 AM · vendor periods 12:45 AM · placements 1:00 AM · deliveries every 10 min`
+    );
   });
 }
 

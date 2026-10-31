@@ -18,6 +18,14 @@
     {
       "path": "/api/deliveries/expire",
       "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/vendor-subscription/expire",
+      "schedule": "15 19 * * *"
+    },
+    {
+      "path": "/api/promotions/expire",
+      "schedule": "30 19 * * *"
     }
   ],
   "routes": [

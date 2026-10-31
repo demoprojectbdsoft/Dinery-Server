@@ -62,6 +62,25 @@ export async function requireStore(userId: string) {
   return store;
 }
 
+const BLOCKED_STORE_STATUSES = ["suspended", "closed"] as const;
+
+/**
+ * A shop that cannot trade cannot use the benefits it paid for either.
+ *
+ * Each desk says what it was about to do, because a seller told only to
+ * "contact the store team" has no way of saying what to contact them about.
+ */
+export async function requireTradingStore(userId: string, action: string) {
+  const store = await requireStore(userId);
+  if (BLOCKED_STORE_STATUSES.includes(store.status as (typeof BLOCKED_STORE_STATUSES)[number])) {
+    throw new ApiError(
+      403,
+      `This store is ${store.status}. Contact the store team before ${action}.`
+    );
+  }
+  return store;
+}
+
 export async function getMyStore(userId: string) {
   return toStoreDto(await requireStore(userId));
 }

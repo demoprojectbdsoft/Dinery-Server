@@ -24,6 +24,7 @@
    - [Order lifecycle](#order-lifecycle)
    - [Loyalty points & membership](#loyalty-points--membership)
    - [Discount coupons](#discount-coupons)
+   - [Featured promotions](#featured-promotions)
    - [Payments & transactions](#payments--transactions)
    - [Warranty coverage & claims](#warranty-coverage--claims)
    - [Reviews & ratings](#reviews--ratings)
@@ -50,7 +51,7 @@ Sparq-Server is the backend of the [Sparq](https://github.com/demoprojectbdsoft/
 | **Data & business rules** | All prices, discounts, shipping fees, points and totals are computed here, never accepted from the client. |
 | **Authorization** | Every private endpoint verifies the caller and decides what they may read or change. |
 | **Integrity** | Order placement, cancellation and delivery run in a database transaction, so stock, money and points can never partially apply. |
-| **Scheduled jobs** | Two daily jobs: one restores demo-admin edits, one expires lapsed warranties. |
+| **Scheduled jobs** | Daily sweeps: demo-admin edits are restored, lapsed warranties close, unanswered delivery offers are cancelled, expired subscription periods close, and featured placements whose date has passed come off the shelves. |
 
 **What this server does not own**
 
@@ -105,7 +106,7 @@ src/
 │   ├── subcategory/           subcategories under a category
 │   ├── transaction/           payment records tied to an order
 │   ├── user/                  accounts, self-service profile, data export
-│   ├── vendor/                seller workspace: applications, plans, storefront, catalogue, subscription, own orders, sales report
+│   ├── vendor/                seller workspace: applications, plans, storefront, catalogue, subscription, own orders, sales report, coupons, featured placements
 │   ├── warranty/              coverage records and claims
 │   └── wishlist/              saved products
 └── utils/
@@ -216,6 +217,21 @@ One collection serves both writers: the store team's global codes and a seller's
 | `PATCH` | `/coupons/:id` | Admin | Any field, so one switch can be flipped without resending the code |
 | `DELETE` | `/coupons/:id` | Admin | Deletes an unused code. A code that has already been redeemed is deactivated instead, so the ledger and the orders that quote it survive |
 | `POST` | `/coupons/validate` | Bearer | `code` plus `items[{productId, quantity}]` → the discount, or the reason there is none. Prices, sellers and categories are read back from the database, so nothing about the money comes from the browser |
+
+### Featured promotions
+
+A placement is a dated row, not a checkbox. `FeaturedPromotion` records who bought it (the seller's plan or the store team), what it lifts (one product, or the whole shop) and until when — and it is the only writer of `Product.isFeatured` and `VendorStore.isFeatured`.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| `GET` | `/promotions` | Admin | Every placement or one seller's (`vendorId`), filterable by `kind` (`product` / `store` / `all`) and `status` (`live` / `ended` / `cancelled` / `all`); paginated, with a count per state |
+| `POST` | `/promotions` | Admin | Grant a placement: `kind` plus `productId` or `vendorId`, `days` (1–365, default 30) and an optional `reason` the seller reads. The shop it belongs to is read from the row being lifted, never sent |
+| `DELETE` | `/promotions/:id` | Admin | End a placement early with the reason. Nothing is deleted — the row stays so the desk can say what ran and why it stopped |
+| `GET` | `/promotions/expire` | Cron / Admin | The daily sweep: closes every placement past `endsAt` and dims what it lifted |
+| `GET` | `/vendor-promotions` | Vendor | The seller's own placements, same filters and per-state counts |
+| `POST` | `/vendor-promotions` | Vendor | `{ productId }` only. The plan decides the length, the allowance decides whether there is a slot, and the account decides whose product it is |
+| `DELETE` | `/vendor-promotions/:id` | Vendor | Free the slot early. Only the seller's own row, and a foreign id answers `404` |
+| `GET` | `/vendor-subscription/expire` | Cron / Admin | Closes periods that ran out while nobody read them, and ends the placements the expired plan had bought |
 
 ### Orders, status history & transactions
 
@@ -352,7 +368,7 @@ Once the account is a vendor, everything else is scoped by the token. There is n
 | Method | Path | Access | Notes |
 |---|---|---|---|
 | `GET` | `/vendor-store/mine` | Vendor | The seller's own storefront row |
-| `PATCH` | `/vendor-store/mine` | Vendor | Name, description, logo, cover, contact, address, socials. `isVisible`, `isFeatured` and `status` are the store team's switches, not editable here |
+| `PATCH` | `/vendor-store/mine` | Vendor | Name, description, logo, cover, contact, address, socials. `isVisible` and `status` are the store team's switches, and being a featured *shop* is a placement only the store team can grant — none of the three is editable here |
 | `GET` | `/vendor-products` | Vendor | Own catalogue with per-status counts, the plan's `maxProducts` and its usage. Query: `status` (`draft`, `pending_review`, `published`, `rejected`, `archived`, `out_of_stock`, `all`), `search` over title/sku/brand, `page`, `limit` (max 100) |
 | `POST` | `/vendor-products` | Vendor | Create a listing. `publish: true` takes it live and is the branch that checks the plan limit; asking to publish with no stock leaves it `out_of_stock` |
 | `GET` | `/vendor-products/:id` | Vendor | One of the caller's own products |
@@ -371,11 +387,15 @@ Once the account is a vendor, everything else is scoped by the token. There is n
 | `GET` | `/vendor-coupons/:id` | Vendor | One of the caller's own codes |
 | `PATCH` | `/vendor-coupons/:id` | Vendor | Any own field. Waking a stopped code costs a slot, so it re-checks the allowance |
 | `DELETE` | `/vendor-coupons/:id` | Vendor | Deletes a code nobody has used yet; one that has been redeemed is only stopped |
+| `GET` | `/vendor-promotions` | Vendor | The seller's own featured placements with per-state counts and days remaining |
+| `POST` | `/vendor-promotions` | Vendor | `{ productId }` — an own listing in a buyable status. The plan's `featuredDurationDays` sets the window and `featuredProducts` sets how many may run at once |
+| `DELETE` | `/vendor-promotions/:id` | Vendor | Ends the placement early and frees the slot; the row stays on the desk |
 
 - No seller read ever leaves the shop's own rows: products are filtered by `vendorId`, orders by the vendor's `vendorId`, and the analytics fold only that seller's groups. A shop can never see another shop's turnover.
 - Plan limits are enforced on write, in the service, not in the screen: `assertWithinLimit` reads the live plan through `getVendorPlanState` and refuses with the headroom in the message.
-- A suspended or closed store cannot trade: `requireTradingStore` blocks catalogue writes until the store team lifts the suspension.
+- A suspended or closed store cannot trade: `requireTradingStore` blocks catalogue writes, new codes and fresh placements until the store team lifts the suspension, and the message names the action it refused.
 - A seller's code never reaches across the marketplace: `evaluateCoupon` counts only that vendor's own lines, so other shops' goods and the platform's stock stay at full price even in a mixed basket.
+- A seller can pin a product but never a shop: `POST /vendor-promotions` only takes `kind: "product"`, and the length comes from the plan, so no request can book a decade of shelf space or lift the whole storefront for free.
 
 ---
 
@@ -561,6 +581,25 @@ Two owners, one engine. `ownerType` says who wrote the code, and that one field 
 | **A spent code is never erased** | Deleting a coupon with `usedCount > 0` deactivates it instead. Orders keep quoting the code they were bought with. |
 | **The seller's allowance** | `activeCoupons` counts this vendor's codes that are `isActive` and have not yet ended. Creating one, and waking a stopped one, both run `assertWithinLimit`. A code can only name products from the seller's own shelf. |
 | **A dead plan stops new codes** | `assertWithinLimit` refuses when the subscription is not live, and a suspended or closed store cannot create one at all. |
+
+### Featured promotions
+
+Being featured is bought, not claimed. One collection holds both kinds of placement, and one service is the only hand that turns the display switches on or off.
+
+| Rule | Detail |
+|---|---|
+| **One writer of "featured"** | `Product.isFeatured` and `VendorStore.isFeatured` are only switches this module flips. Nothing else lights them, so a placement that ends cannot leave a product shining on the shelves because nobody remembered to turn it off. |
+| **Two kinds** | `kind: "product"` pins one listing; `kind: "store"` lifts the whole shop into the featured vendors row and writes `featuredUntil` on the store. A store placement takes no product, and a product placement reads its owner from the product. |
+| **Who may buy what** | A seller may pin their own listings for the window their plan states. Being a featured *store* is the store team's grant alone — no seller route can lift its own shop. |
+| **The length is never sent** | A seller's placement runs for `featuredDurationDays` from the live plan; an admin grant states `days` (1–365). A browser cannot book a decade of shelf space. |
+| **One shelf, one booking** | A partial unique index keeps at most one active placement per product and per vendor, and a second press answers `409` with how many days are already left on it. |
+| **State is read against the clock** | `live` / `ended` / `cancelled` comes from the row's status *and* `endsAt`, so a desk is truthful even before the sweep has run. |
+| **The sweep dims what lapsed** | `/promotions/expire` closes every placement past its date and turns its switch off. Vercel Cron runs it daily; an admin can run the same route by hand. |
+| **Unbuyable means unfeatured** | Archiving a listing, or moving it out of a buyable status or hiding it, ends the placement with the reason written on the row — the shelf is given back rather than left showing something nobody can reach. |
+| **A dead plan clears the board** | When a period expires — on read, or by `/vendor-subscription/expire` — every placement it paid for ends. The shop keeps its products, orders and coupons. |
+| **A grant is not billed** | `featuredProducts` counts the placements the shop bought (`source: "subscription"`). A favour from the store team lifts a product without eating a slot somebody paid for. |
+| **Only the store's own goods keep a hand switch** | Flipping `isFeatured` on the products desk is refused for a seller's product with a pointer to the promotions board, because that flag needs an end date. Store-owned products keep the plain editorial switch. |
+| **Rows are closed, never deleted** | Cancelling keeps the placement so the desk can say what ran, for how long and why it stopped — which is also how a seller learns that a grant was withdrawn. |
 
 ### Payments & transactions
 
@@ -857,7 +896,7 @@ To check end to end: sign in as the demo admin, add a category and edit a produc
 | `PORT` | No | Port the server listens on. Default `5000`. |
 | `MONGODB_URI` | **Yes** | MongoDB Atlas connection string. The server refuses to boot without it. |
 | `NEXT_PUBLIC_CLIENT_URL` | **Yes** | Frontend URL — its `/api/auth/jwks` endpoint verifies every JWT, and it is the expected token issuer. |
-| `CRON_SECRET` | For cron | Long random string guarding `/api/demo/restore`. Generate with `openssl rand -hex 24`. |
+| `CRON_SECRET` | For cron | Long random string guarding the scheduled sweeps (`/api/demo/restore`, `/api/warranties/expire`, `/api/deliveries/expire`, `/api/vendor-subscription/expire`, `/api/promotions/expire`). Generate with `openssl rand -hex 24`. |
 | `INTERNAL_API_KEY` | For password reset | Shared secret the storefront sends as `x-internal-key` to reach `POST /api/mail/reset-password`. The Next.js app holds the same value in its `INTERNAL_API_KEY`. Generate one with `openssl rand -hex 24`. |
 | `DEMO_ADMIN_EMAIL` | No | Email of the shared demo admin. Default `admin@gmail.com`. |
 | `CRON_TIMEZONE` | No | Timezone for the local jobs. Default `Asia/Dhaka`. |
@@ -920,16 +959,19 @@ The API is then available at [http://localhost:5000](http://localhost:5000).
 
 > 💡 The [Sparq frontend](https://github.com/demoprojectbdsoft/Sparq-Electronics-Store) must be running at `NEXT_PUBLIC_CLIENT_URL`, otherwise no token can be verified and every private route returns `401`.
 
-**Deploying to Vercel** — set the same variables in the project settings and keep both daily crons:
+**Deploying to Vercel** — set the same variables in the project settings and keep every daily cron:
 
 ```json
 "crons": [
   { "path": "/api/demo/restore", "schedule": "0 18 * * *" },
-  { "path": "/api/warranties/expire", "schedule": "30 18 * * *" }
+  { "path": "/api/warranties/expire", "schedule": "30 18 * * *" },
+  { "path": "/api/deliveries/expire", "schedule": "0 18 * * *" },
+  { "path": "/api/vendor-subscription/expire", "schedule": "15 19 * * *" },
+  { "path": "/api/promotions/expire", "schedule": "30 19 * * *" }
 ]
 ```
 
-Schedules are UTC, so `18:00` is midnight and `18:30` is 00:30 in Asia/Dhaka. On Vercel's Hobby plan a cron runs once a day with up to ±1 hour of drift; when the server runs elsewhere, the built-in `node-cron` jobs cover it. Both are listed because a serverless function has no long-lived process to schedule anything itself.
+Schedules are UTC, so `18:00` is midnight and `18:30` is 00:30 in Asia/Dhaka; the two vendor sweeps run at 01:15 and 01:30 local, a period closing before the shelves it paid for are dimmed. On Vercel's Hobby plan a cron runs once a day with up to ±1 hour of drift; when the server runs elsewhere, the built-in `node-cron` jobs cover it. Both are listed because a serverless function has no long-lived process to schedule anything itself.
 
 ---
 
@@ -974,9 +1016,10 @@ Every rider read starts from the `riderId` in the verified token — no endpoint
 | Rider role, immediate role refresh and no-shopping guards | ✅ Complete |
 | Delivery model, rider job list and rider stats endpoints | ✅ Phase 2 of 7 |
 | Vendor applications, review desk, plans and billing | ✅ Complete |
-| Seller workspace — storefront, catalogue with plan limits, subscription, order board, sales report | ✅ Complete |
+| Seller workspace — storefront, catalogue with plan limits, subscription, order board, sales report, coupons and placements | ✅ Complete |
 | Multi-vendor checkout — one fulfilment group per seller, synced with the parent order | ✅ Complete |
 | Discount coupons — one engine for store-wide and per-seller codes, spent at checkout with a reversible ledger | ✅ Complete |
+| Featured placements — dated placements bought with a plan or granted by the store team, swept to expiry daily | ✅ Complete |
 | Customer & rider notifications — in-app feed and transactional email | ✅ Complete |
 | Account data export | ✅ Complete |
 | Rate limiting, CORS allow-list, database indexes | ⏳ Planned |
@@ -994,6 +1037,7 @@ Every rider read starts from the `riderId` in the verified token — no endpoint
 - [ ] **Automated tests** — unit and integration coverage per module.
 - [ ] **Real payment gateway** — Stripe / SSLCommerz / bKash, replacing the simulated wallet flow.
 - [x] **Coupons & promo codes** — one server-validated engine for the store team's global codes and a seller's own codes, applied at checkout with a redemption ledger that reverses on cancellation.
+- [x] **Featured promotions** — dated placements that a seller buys with their plan or the store team grants, one writer of the featured flag, a daily sweep that dims what lapsed.
 - [ ] **Rider assignment & lifecycle** — admin assignment at `Shipped`, accept/decline, pickup to delivery, live location (Phases 3–5).
 - [ ] **Public vendor storefronts & discovery** — per-shop pages under `/shop/`, featured shops and search.
 - [ ] **"Lucky Box" rewards** — a gamified way to spend loyalty points.
