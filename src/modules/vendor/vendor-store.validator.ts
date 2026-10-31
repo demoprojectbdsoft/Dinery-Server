@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { VENDOR_STORE_STATUSES } from "./vendor.types";
 
 /**
  * What a vendor may change about their own storefront.
@@ -43,3 +44,25 @@ export const updateStoreSchema = z
   .refine((value) => Object.keys(value).length > 0, { message: "Nothing to update" });
 
 export type UpdateStoreInput = z.infer<typeof updateStoreSchema>;
+
+/**
+ * The store team's read of every shop.
+ *
+ * A seller never asks this for a list — they have `/vendor-store/mine` — so the
+ * filters here exist for the desks that must choose a shop among everyone's.
+ */
+export const storeQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  status: z.enum([...VENDOR_STORE_STATUSES, "all"]).optional().default("all"),
+  /** Only the shops a placement is lighting up right now. */
+  featured: z
+    .preprocess(
+      (value) =>
+        value === "true" || value === true ? true : value === "false" || value === false ? false : undefined,
+      z.boolean().optional()
+    ),
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export type StoreQuery = z.infer<typeof storeQuerySchema>;

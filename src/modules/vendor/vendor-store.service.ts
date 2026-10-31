@@ -1,14 +1,15 @@
 import { ApiError } from "../../utils/apiError";
 import { VendorStore } from "./vendor-store.model";
-import type { UpdateStoreInput } from "./vendor-store.validator";
+import type { StoreQuery, UpdateStoreInput } from "./vendor-store.validator";
 
 /**
  * The vendor's own storefront.
  *
  * A vendor reads and edits exactly one row: the one whose `userId` is the
  * signed-in account. The id is never taken from the request, so there is no
- * path through this module that can reach another seller's shop; the admin
- * desk in the marketplace module is the only other writer.
+ * path through this module that can reach another seller's shop. The store
+ * team reads the whole list, and the promotions service is the only writer of
+ * the featured flags this row carries.
  */
 
 /** Turns the stored row into the shape the dashboard edits. */
@@ -148,4 +149,47 @@ export async function getVisibleStoreBySlug(slug: string) {
 
   if (!store) throw new ApiError(404, "Store not found");
   return toStoreDto(store);
+}
+
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * One page of shops, for the desks that must pick one among everyone's.
+ *
+ * The row keeps the seller's account id, because that is what a placement is
+ * granted to — a featured shop belongs to the vendor, and the store is read
+ * back from them rather than sent along.
+ */
+export async function listStores(query: StoreQuery) {
+  const { search, status, featured, page, limit } = query;
+  const filter: Record<string, unknown> = {};
+
+  if (status !== "all") filter.status = status;
+  if (featured === true) filter.isFeatured = true;
+
+  if (search?.trim()) {
+    const match = new RegExp(escapeRegex(search.trim()), "i");
+    filter.$or = [{ name: match }, { slug: match }, { category: match }, { email: match }];
+  }
+
+  const [rows, total] = await Promise.all([
+    VendorStore.find(filter)
+      .populate("userId", "name email image")
+      .sort({ isFeatured: -1, productCount: -1, name: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean(),
+    VendorStore.countDocuments(filter),
+  ]);
+
+  return {
+    stores: rows.map((store: any) => ({
+      ...toStoreDto(store),
+      userId: String(store.userId?._id ?? store.userId ?? ""),
+      ownerName: store.userId?.name || "",
+      ownerEmail: store.userId?.email || "",
+    })),
+    total,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
+  };
 }

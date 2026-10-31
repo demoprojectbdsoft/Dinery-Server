@@ -352,6 +352,7 @@ The storefront keeps no mailbox of its own. When a customer clicks **Forgot pass
 | `GET` | `/vendor-applications` | Admin | Search, status filter, pagination, per-status counts |
 | `GET` | `/vendor-applications/:id` | Admin | Application, applicant summary, created store |
 | `PATCH` | `/vendor-applications/:id/review` | Admin | `under_review`, `approve`, `reject` (reason required) |
+| `GET` | `/vendor-store` | Admin | Every shop on one page — `search` over name/slug/category/email, `status`, `featured`, paginated. Each row carries the seller's account id, which is what a storefront placement is granted to |
 | `GET` | `/vendor-plans` | Public | The three plans, merged with admin edits |
 | `PATCH` | `/vendor-plans/:planId` | Admin | Prices, limits, benefits, billing cycles, commission, grace period |
 
