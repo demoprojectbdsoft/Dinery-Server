@@ -457,6 +457,7 @@ export async function listAssignableRiders(orderId?: string) {
     riders: riders
       .map((rider: any) => {
         const availability = rider.availability === "offline" ? "offline" : "online";
+        const suspended = rider.status === "suspended";
         const activeJobs = activeMap.get(String(rider._id)) || 0;
         return {
           _id: String(rider._id),
@@ -465,13 +466,15 @@ export async function listAssignableRiders(orderId?: string) {
           phone: rider.phone || "",
           image: rider.image || "",
           availability,
+          suspended,
           vehicleType: rider.vehicleType || "",
           vehicleNumber: rider.vehicleNumber || "",
           activeJobs,
           completedJobs: deliveredMap.get(String(rider._id)) || 0,
           // An offline rider can still be picked: the store may know they are
-          // on their way in. The reason is shown, not enforced.
-          available: availability === "online",
+          // on their way in. A suspended one cannot, because the assignment
+          // would be refused anyway.
+          available: availability === "online" && !suspended,
         };
       })
       .sort((a, b) => {
@@ -480,6 +483,11 @@ export async function listAssignableRiders(orderId?: string) {
         return a.name.localeCompare(b.name);
       }),
     currentRiderId: live ? String(live.riderId) : null,
+    // The live job itself, so the picker knows whether it is handing over an
+    // unanswered offer or looking at work a rider already accepted.
+    currentDelivery: live
+      ? { _id: String(live._id), status: live.status, riderId: String(live.riderId) }
+      : null,
   };
 }
 
@@ -564,21 +572,27 @@ export async function assignDelivery(input: AssignDeliveryInput, adminId?: strin
   if (order.orderStatus === "cancelled" || order.orderStatus === "delivered") {
     throw new ApiError(400, `A ${order.orderStatus} order cannot be assigned to a rider`);
   }
-  if (order.orderStatus === "shipped") {
-    throw new ApiError(400, "This order is already shipped. Reassign its delivery instead.");
-  }
 
-  const rider = await User.findById(input.riderId).select("role name availability").lean();
+  const rider = await User.findById(input.riderId).select("role name availability status").lean();
   if (!rider || (rider as any).role !== "rider") {
     throw new ApiError(400, "That account is not a rider");
   }
+  if ((rider as any).status === "suspended") {
+    throw new ApiError(400, "That rider's account is suspended and cannot take deliveries");
+  }
 
+  // One live job per order, whatever the order's own stage. A shipped order is
+  // allowed here only when nothing is live: the parcel came back after a
+  // cancellation, or the order was shipped before anybody was assigned.
   const existing = await Delivery.findOne({
     orderId: order._id,
     status: { $in: LIVE_DELIVERY_STATUSES },
   }).select("_id riderId");
   if (existing) {
-    throw new ApiError(409, "This order already has a live delivery. Reassign it instead.");
+    throw new ApiError(
+      order.orderStatus === "shipped" ? 400 : 409,
+      "This order already has a live delivery. Reassign it instead."
+    );
   }
 
   const delivery = await createAssignment({
@@ -629,13 +643,23 @@ export async function reassignDelivery(
   adminId?: string
 ) {
   const current = await requireDelivery(deliveryId);
-  if (!LIVE_DELIVERY_STATUSES.includes(current.status as DeliveryStatus)) {
-    throw new ApiError(400, "This delivery is finished and cannot be reassigned");
+  // Only an unanswered offer can be handed on. Once the rider accepts, the job
+  // is theirs: the store can watch it, but not quietly move it to somebody else.
+  if (current.status !== "assigned") {
+    throw new ApiError(
+      400,
+      LIVE_DELIVERY_STATUSES.includes(current.status as DeliveryStatus)
+        ? "The rider has already accepted this delivery. Ask them to cancel it from their dashboard if it cannot go ahead."
+        : "This delivery is finished and cannot be reassigned"
+    );
   }
 
-  const rider = await User.findById(input.riderId).select("role").lean();
+  const rider = await User.findById(input.riderId).select("role status").lean();
   if (!rider || (rider as any).role !== "rider") {
     throw new ApiError(400, "That account is not a rider");
+  }
+  if ((rider as any).status === "suspended") {
+    throw new ApiError(400, "That rider's account is suspended and cannot take deliveries");
   }
 
   if (String(current.riderId?._id ?? current.riderId) === input.riderId) {
@@ -704,7 +728,10 @@ export async function reassignDelivery(
 export async function acceptDelivery(riderId: string, id: string) {
   if (!Types.ObjectId.isValid(id)) throw new ApiError(404, "Delivery not found");
 
-  const rider = await User.findById(riderId).select("availability").lean();
+  const rider = await User.findById(riderId).select("availability status").lean();
+  if ((rider as any)?.status === "suspended") {
+    throw new ApiError(400, "This account is suspended and cannot take deliveries.");
+  }
   if ((rider as any)?.availability === "offline") {
     throw new ApiError(400, "You are offline. Go online to accept new deliveries.");
   }
@@ -1193,7 +1220,8 @@ export async function cancelDeliveryByAdmin(
  *
  * Accepting already refuses an expired row, so this sweep only tidies the
  * board. It is safe to run at any time, and it never touches a job a rider has
- * accepted.
+ * accepted. Each row is closed on its own so the rider who missed it is told
+ * exactly once — a row a rider answered a moment earlier simply does not match.
  */
 export async function expireStaleDeliveries() {
   const now = new Date();
@@ -1201,26 +1229,55 @@ export async function expireStaleDeliveries() {
     status: "assigned",
     expiresAt: { $ne: null, $lt: now },
   })
-    .select("_id orderId")
+    .select("_id orderId riderId")
     .lean();
 
   if (stale.length === 0) return { expired: 0 };
 
-  await Delivery.updateMany(
-    { _id: { $in: stale.map((row: any) => row._id) }, status: "assigned" },
-    {
-      $set: { status: "cancelled", cancelledAt: now },
-      $push: {
-        history: {
-          status: "cancelled",
-          at: now,
-          note: "Request expired without an answer",
+  let expired = 0;
+
+  for (const row of stale) {
+    const closed = await Delivery.findOneAndUpdate(
+      { _id: row._id, status: "assigned" },
+      {
+        $set: { status: "cancelled", cancelledAt: now },
+        $push: {
+          history: {
+            status: "cancelled",
+            at: now,
+            note: "Request expired without an answer",
+          },
         },
       },
-    }
-  );
+      { new: true }
+    )
+      .select("_id orderId riderId")
+      .lean();
 
-  return { expired: stale.length };
+    if (!closed) continue;
+    expired += 1;
+
+    // The rider is the one who lost a job: in-app only, because an email about
+    // an offer they already ignored is noise.
+    await notifyUser({
+      userId: String(closed.riderId),
+      role: "rider",
+      type: "delivery_update",
+      title: `Delivery request ${shortOrderNumber(closed.orderId)} expired`,
+      detail: "The answer window closed without an answer. The store can offer it again.",
+      ref: String(closed._id),
+    });
+  }
+
+  if (expired > 0) {
+    await recordActivity({
+      type: "delivery",
+      title: `${expired} delivery request${expired === 1 ? "" : "s"} expired`,
+      detail: "Nobody answered inside the window, so the offers were closed.",
+    });
+  }
+
+  return { expired };
 }
 
 // ─── Shared ───────────────────────────────────────────────────────────────────

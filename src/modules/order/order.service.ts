@@ -22,7 +22,7 @@ import {
   notifyOrderPlaced,
   notifyOrderStatusChanged,
 } from "../activity/activity.notifications";
-import { Delivery, LIVE_DELIVERY_STATUSES } from "../delivery/delivery.model";
+import { ACTIVE_DELIVERY_STATUSES, Delivery, LIVE_DELIVERY_STATUSES } from "../delivery/delivery.model";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -590,6 +590,30 @@ export async function updateOrderStatus(
         throw new ApiError(
           400,
           "Assign a rider before marking this order shipped. Open the order and choose Ship with a rider."
+        );
+      }
+    }
+
+    // Once a rider has taken the parcel, the last word is theirs. The store can
+    // still watch the job and settle an issue, but closing the sale or calling
+    // it off behind the rider's back contradicts the person standing at the
+    // door. Stopping the job itself is a separate, deliberate step: cancel the
+    // delivery first, then the order.
+    if (
+      !options.byRider &&
+      (data.orderStatus === "delivered" || data.orderStatus === "cancelled")
+    ) {
+      const inRiderHands = await Delivery.findOne({
+        orderId: id,
+        status: { $in: ACTIVE_DELIVERY_STATUSES },
+      })
+        .select("_id")
+        .session(session ?? null);
+
+      if (inRiderHands) {
+        throw new ApiError(
+          400,
+          "A rider has accepted this delivery, so only the rider can close it. Ask them to mark it delivered or cancelled from their dashboard."
         );
       }
     }
