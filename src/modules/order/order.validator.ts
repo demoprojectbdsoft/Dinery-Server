@@ -31,6 +31,17 @@ export const createOrderSchema = z
     shippingMethod: z.enum(["free", "standard", "express"]).optional(),
     /** Loyalty points the customer chose to spend on this order (100 pts = 1 unit). */
     pointsToRedeem: z.number().int().min(0).optional(),
+    /**
+     * A discount code typed at checkout. It is only a name: what it is worth is
+     * worked out again from the database, never taken from the request.
+     */
+    couponCode: z
+      .string()
+      .trim()
+      .min(3, "A coupon code needs at least 3 characters")
+      .max(32, "A coupon code is too long")
+      .transform((value) => value.toUpperCase())
+      .optional(),
   })
   .superRefine((data, ctx) => {
     const sa = data.shippingAddress;

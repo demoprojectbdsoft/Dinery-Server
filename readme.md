@@ -23,6 +23,7 @@
    - [Seller workspace & multi-vendor orders](#seller-workspace--multi-vendor-orders)
    - [Order lifecycle](#order-lifecycle)
    - [Loyalty points & membership](#loyalty-points--membership)
+   - [Discount coupons](#discount-coupons)
    - [Payments & transactions](#payments--transactions)
    - [Warranty coverage & claims](#warranty-coverage--claims)
    - [Reviews & ratings](#reviews--ratings)
@@ -90,6 +91,7 @@ src/
 │   ├── cart/                  cart items
 │   ├── category/              top-level categories
 │   ├── contact/               contact-page messages, saved then emailed to the store inbox
+│   ├── coupon/                discount codes — one engine for store-wide and per-seller codes
 │   ├── demo/                  demo-admin write tracking + restore endpoint
 │   ├── mail/                  emails the storefront asks for (the password reset link)
 │   ├── message/               stored contact messages, read in the admin dashboard
@@ -201,6 +203,19 @@ Both routers apply `requireAuth` to every route. The `:userId` path variants are
 | `GET` | `/wishlist/user/:userId` | Bearer |
 | `POST` | `/wishlist` | Bearer |
 | `DELETE` | `/wishlist/:productId` | Bearer |
+
+### Discount coupons
+
+One collection serves both writers: the store team's global codes and a seller's own codes are the same document with a different `ownerType`, so the checkout has a single validator instead of two rule sets that could drift. Only this module decides what a code is worth.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| `GET` | `/coupons` | Admin | Every code, filterable by `owner` (`all` / `admin` / `vendor`), `status` (`live` / `upcoming` / `expired` / `stopped` / `all`) and `search` over code, title and description; paginated, with a count per state |
+| `POST` | `/coupons` | Admin | `code` is stored upper-cased and must be free; `discountType` is `percentage` (1–100) or `fixed`; `endDate` must follow `startDate` |
+| `GET` | `/coupons/:id` | Admin | One code with its usage, remaining allowance and redemption count |
+| `PATCH` | `/coupons/:id` | Admin | Any field, so one switch can be flipped without resending the code |
+| `DELETE` | `/coupons/:id` | Admin | Deletes an unused code. A code that has already been redeemed is deactivated instead, so the ledger and the orders that quote it survive |
+| `POST` | `/coupons/validate` | Bearer | `code` plus `items[{productId, quantity}]` → the discount, or the reason there is none. Prices, sellers and categories are read back from the database, so nothing about the money comes from the browser |
 
 ### Orders, status history & transactions
 
@@ -351,10 +366,16 @@ Once the account is a vendor, everything else is scoped by the token. There is n
 | `GET` | `/vendor-orders/:id` | Vendor | One group, with the parent order's customer, payment and the live delivery/rider state |
 | `PATCH` | `/vendor-orders/:id/status` | Vendor | `accepted`, `processing`, `ready_for_shipment`, or `rejected` with a reason. `shipped` / `delivered` / `cancelled` are refused — those come from the parent order |
 | `GET` | `/vendor-analytics?range=` | Vendor | The seller's own sales report for `7`, `30`, `90` or `365` days, shortened to the window the plan allows |
+| `GET` | `/vendor-coupons` | Vendor | The seller's own codes, with the same `status` / `search` / paging filters as the admin desk |
+| `POST` | `/vendor-coupons` | Vendor | New code. The plan's `activeCoupons` allowance is checked first, and `productIds` may only name this seller's own products |
+| `GET` | `/vendor-coupons/:id` | Vendor | One of the caller's own codes |
+| `PATCH` | `/vendor-coupons/:id` | Vendor | Any own field. Waking a stopped code costs a slot, so it re-checks the allowance |
+| `DELETE` | `/vendor-coupons/:id` | Vendor | Deletes a code nobody has used yet; one that has been redeemed is only stopped |
 
 - No seller read ever leaves the shop's own rows: products are filtered by `vendorId`, orders by the vendor's `vendorId`, and the analytics fold only that seller's groups. A shop can never see another shop's turnover.
 - Plan limits are enforced on write, in the service, not in the screen: `assertWithinLimit` reads the live plan through `getVendorPlanState` and refuses with the headroom in the message.
 - A suspended or closed store cannot trade: `requireTradingStore` blocks catalogue writes until the store team lifts the suspension.
+- A seller's code never reaches across the marketplace: `evaluateCoupon` counts only that vendor's own lines, so other shops' goods and the platform's stock stay at full price even in a mixed basket.
 
 ---
 
@@ -521,6 +542,25 @@ Tiers      silver < 1,000 · gold 1,000 · platinum 4,000 · diamond 10,000
 - A redemption is a **guarded atomic update**: `findOneAndUpdate({ _id, points: { $gte: n } }, { $inc: { points: -n } })`. Two tabs checking out at the same time can never spend the same points twice, because the balance check and the debit happen in one database operation.
 - The whole order — stock, points, order document, transaction — shares one session, so a failure anywhere rolls back all of it.
 - The tier is never stored blind: it is recalculated from the balance whenever points change (delivery, cancellation, admin edit).
+
+### Discount coupons
+
+Two owners, one engine. `ownerType` says who wrote the code, and that one field decides how far the discount may reach.
+
+| Rule | Detail |
+|---|---|
+| **One code, one meaning** | `code` is stored upper-cased under a unique index, so `save10` and `SAVE10` cannot be two coupons. A clash on write answers `409`. |
+| **Whose goods** | An admin code may name any product or category in the store. A vendor code only ever counts lines owned by that vendor; another shop's goods and the platform's stock are left at full price. |
+| **Narrowing** | `productIds` and `categoryIds` are both optional. Empty means everything the owner may discount, and a line qualifies through either list. |
+| **What it is worth** | A percentage takes its share of the *eligible* subtotal, capped by `maxDiscountAmount` when that is set. A fixed amount is capped by the eligible subtotal. Money is rounded to two decimals and recomputed on the server every single time. |
+| **Refusals name themselves** | "not active yet", "expired", "used up", the per-customer limit, "does not apply to anything in your cart" and the `minOrderAmount` shortfall are separate messages — a shopper who typed a real code correctly must not be told it is invalid. |
+| **State is derived** | `live` / `upcoming` / `expired` / `stopped` is read from `isActive`, the two dates and the usage counter. It is never a stored flag, so it cannot go stale. |
+| **Order of the money** | The coupon comes off the subtotal first; loyalty points may then only cover what the code left to pay for; the shipping fee is added on top. Points are earned on the discounted product total only. |
+| **Redemption ledger** | Each use pushes `{ orderId, customerId, amount, at }` onto the code and raises `usedCount` / `discountGiven`, inside the order's own transaction. |
+| **Cancellation gives it back** | `releaseCouponForOrder` reverses the one entry whose `reversedAt` is still null and moves the counters once, so a replayed cancellation cannot refund a code twice. |
+| **A spent code is never erased** | Deleting a coupon with `usedCount > 0` deactivates it instead. Orders keep quoting the code they were bought with. |
+| **The seller's allowance** | `activeCoupons` counts this vendor's codes that are `isActive` and have not yet ended. Creating one, and waking a stopped one, both run `assertWithinLimit`. A code can only name products from the seller's own shelf. |
+| **A dead plan stops new codes** | `assertWithinLimit` refuses when the subscription is not live, and a suspended or closed store cannot create one at all. |
 
 ### Payments & transactions
 
@@ -936,6 +976,7 @@ Every rider read starts from the `riderId` in the verified token — no endpoint
 | Vendor applications, review desk, plans and billing | ✅ Complete |
 | Seller workspace — storefront, catalogue with plan limits, subscription, order board, sales report | ✅ Complete |
 | Multi-vendor checkout — one fulfilment group per seller, synced with the parent order | ✅ Complete |
+| Discount coupons — one engine for store-wide and per-seller codes, spent at checkout with a reversible ledger | ✅ Complete |
 | Customer & rider notifications — in-app feed and transactional email | ✅ Complete |
 | Account data export | ✅ Complete |
 | Rate limiting, CORS allow-list, database indexes | ⏳ Planned |
@@ -952,7 +993,7 @@ Every rider read starts from the `riderId` in the verified token — no endpoint
 - [ ] **Database indexes** — compound indexes for the order, product and review query patterns.
 - [ ] **Automated tests** — unit and integration coverage per module.
 - [ ] **Real payment gateway** — Stripe / SSLCommerz / bKash, replacing the simulated wallet flow.
-- [ ] **Coupons & promo codes** — server-validated discount codes. Vendor-issued coupons are the next slice of this.
+- [x] **Coupons & promo codes** — one server-validated engine for the store team's global codes and a seller's own codes, applied at checkout with a redemption ledger that reverses on cancellation.
 - [ ] **Rider assignment & lifecycle** — admin assignment at `Shipped`, accept/decline, pickup to delivery, live location (Phases 3–5).
 - [ ] **Public vendor storefronts & discovery** — per-shop pages under `/shop/`, featured shops and search.
 - [ ] **"Lucky Box" rewards** — a gamified way to spend loyalty points.

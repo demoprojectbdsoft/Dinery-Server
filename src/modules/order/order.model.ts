@@ -74,6 +74,16 @@ const orderSchema = new Schema(
     /** Loyalty points this order used up, and the money they saved. */
     pointsRedeemed: { type: Number, default: 0 },
     pointsDiscount: { type: Number, default: 0 },
+    /**
+     * The discount code this order was bought with, and the money it took off.
+     *
+     * The code is copied as text as well as linked, so an order still says what
+     * was typed even after the coupon row is long gone. `couponDiscount` is the
+     * amount the cancellation hands back to the coupon's ledger.
+     */
+    couponId: { type: Schema.Types.ObjectId, ref: "Coupon", default: null },
+    couponCode: { type: String, default: "" },
+    couponDiscount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

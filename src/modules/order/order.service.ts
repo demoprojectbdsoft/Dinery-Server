@@ -24,6 +24,12 @@ import {
 } from "../activity/activity.notifications";
 import { ACTIVE_DELIVERY_STATUSES, Delivery, LIVE_DELIVERY_STATUSES } from "../delivery/delivery.model";
 import { createVendorOrdersForOrder, syncVendorOrdersForParentStatus } from "../vendor/vendor-order.create";
+import {
+  evaluateCoupon,
+  loadCouponLines,
+  redeemCoupon,
+  releaseCouponForOrder,
+} from "../coupon/coupon.service";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -213,6 +219,10 @@ async function applyCancellation(
     if (refundedUser) await syncMembershipTier(refundedUser, session);
   }
 
+  // A code that saved this customer money has its use handed back, so the
+  // allowance the seller set is not eaten by an order that never happened.
+  await releaseCouponForOrder(order, session);
+
   if (!wasDelivered || !order.pointsEarned) return;
 
   // Delivery credited these points, so a return takes them back and re-checks
@@ -349,6 +359,28 @@ function orderSummary(order: {
 
 // ─── Create Order ─────────────────────────────────────────────────────────────
 
+/**
+ * What a typed code is worth on this basket, or why it is worth nothing.
+ *
+ * The lines are re-read from the database instead of trusted from the request, so
+ * the coupon is judged on the price, the seller and the category that are stored
+ * right now — the same reading the cart was shown a moment earlier.
+ */
+async function priceCouponCode(
+  code: string,
+  userId: string,
+  items: { productId: string; quantity: number }[]
+) {
+  const lines = await loadCouponLines(items);
+  const outcome = await evaluateCoupon({ code, userId, lines });
+
+  return {
+    couponId: String(outcome.coupon._id),
+    code: outcome.coupon.code as string,
+    discount: outcome.discount,
+  };
+}
+
 export async function createOrder(data: CreateOrderInput, userId: string) {
   if (data.paymentMethod !== "cod" && !data.transactionId) {
     throw new ApiError(400, "Transaction ID required for wallet payments");
@@ -358,21 +390,32 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
   const { orderItems, subtotal } = await buildOrderItems(data.items);
   const shipping = await resolveShipping(subtotal, data.shippingMethod);
   const pointsRequested = data.pointsToRedeem ?? 0;
+  const couponCode = data.couponCode?.trim();
 
   // The order, its payment row, its first timeline entry, the stock decrement,
   // the points deduction and the cart reset are one unit of work: either all of
   // them land or none.
   const order = await withTransaction(async (session) => {
+    // A code is priced inside the transaction too, because the usage counters it
+    // reads are the ones it is about to write.
+    const coupon = couponCode
+      ? await priceCouponCode(couponCode, userId, data.items)
+      : null;
+    const couponDiscount = coupon?.discount ?? 0;
+
     // Spending points validates the request and updates the balance, so it runs
-    // inside the transaction as well.
+    // inside the transaction as well. The coupon goes first, so points are only
+    // ever asked to cover what the code left to pay for.
     const redemption = pointsRequested
-      ? await redeemPoints(userId, subtotal, pointsRequested, session)
+      ? await redeemPoints(userId, subtotal - couponDiscount, pointsRequested, session)
       : { pointsRedeemed: 0, pointsDiscount: 0 };
 
-    const totalAmount = subtotal + shipping.fee - redemption.pointsDiscount;
+    const totalAmount = subtotal - couponDiscount + shipping.fee - redemption.pointsDiscount;
     // Points are earned on what is really paid for the products, never on the
-    // part that points covered.
-    const pointsEarned = Math.floor((subtotal - redemption.pointsDiscount) * POINTS_PER_DOLLAR);
+    // part that a code or the customer's own points covered.
+    const pointsEarned = Math.floor(
+      (subtotal - couponDiscount - redemption.pointsDiscount) * POINTS_PER_DOLLAR
+    );
 
     const order = new Order({
       userId,
@@ -387,10 +430,24 @@ export async function createOrder(data: CreateOrderInput, userId: string) {
       pointsEarned,
       pointsRedeemed: redemption.pointsRedeemed,
       pointsDiscount: redemption.pointsDiscount,
+      couponId: coupon?.couponId ?? null,
+      couponCode: coupon?.code ?? "",
+      couponDiscount,
     });
     await order.save({ session });
 
     const orderId = order._id.toString();
+
+    // The code is spent in the same unit of work, so an order that rolls back
+    // never burns a redemption and every redemption names the order that caused
+    // it — which is what lets a cancellation hand the use straight back.
+    if (coupon) {
+      await redeemCoupon(
+        coupon.couponId,
+        { orderId, customerId: userId, amount: couponDiscount },
+        session
+      );
+    }
 
     const reference = data.paymentMethod === "cod" ? `COD-${orderId}` : data.transactionId!;
     await createTransaction(
