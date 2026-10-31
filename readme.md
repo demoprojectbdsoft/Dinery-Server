@@ -988,7 +988,7 @@ Schedules are UTC, so `18:00` is midnight and `18:30` is 00:30 in Asia/Dhaka; th
 The `rider` role and the delivery domain are being added in seven phases, without a second authentication system.
 
 - **Roles** — `admin`, `customer`, `rider`, `vendor`. `PATCH /api/users/:id` accepts the new roles; `requireAuth` re-reads the role from the database after a JWT check so a promotion or demotion applies on the next request.
-- **No shopping** — `assertShopper` refuses cart, wishlist and review writes for admin, demo admin, rider and vendor accounts.
+- **Who may shop** — `assertShopper` refuses cart, wishlist and review writes for admin, demo admin and rider accounts. A vendor is *not* refused: an approved seller keeps the same account and may still buy from other shops, so `canShop` lets it through.
 - **Ownership** — every rider endpoint will scope the query to the caller's token, never a body-supplied rider id.
 - **Notifications** — the same `activities` collection carries the store's shared board and each person's own lines, and the same `GET /activities/mine` serves both: the role in the token decides which list "mine" is. The order service writes the customer copy next to every stage change.
 - **Tracking transport** — the API stores only the latest rider position per delivery; the customer page polls it every 8 seconds (Vercel serverless friendly), and optional Ably keys publish the same message for instant updates.
