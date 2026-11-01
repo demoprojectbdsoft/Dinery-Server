@@ -19,6 +19,7 @@
 2. [Architecture](#️-architecture)
 3. [API Reference](#-api-reference)
 4. [Business Rules](#-business-rules)
+   - [Multi-role accounts & per-role suspension](#multi-role-accounts--per-role-suspension)
    - [Vendor application lifecycle](#vendor-application-lifecycle)
    - [Seller workspace & multi-vendor orders](#seller-workspace--multi-vendor-orders)
    - [Order lifecycle](#order-lifecycle)
@@ -258,10 +259,15 @@ A placement is a dated row, not a checkbox. `FeaturedPromotion` records who boug
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| `GET` | `/users` | Admin | Paginated account list, searchable by name, email or a 24-character account id (the bell's new-user line links by id, so it opens exactly that account) |
+| `GET` | `/users` | Admin | Paginated account list, searchable by name, email or a 24-character account id (the bell's new-user line links by id, so it opens exactly that account). A `role` filter matches anyone who *holds* that role in their approved array |
 | `GET` | `/users/me/export` | Bearer | The caller's own data package (JSON download) |
+| `GET` | `/users/me/roles` | Bearer | The caller's approved roles, the suspended subset and the active dashboard — read fresh from the database, never from the token |
+| `PATCH` | `/users/me/active-role` | Bearer | Points the caller's own dashboard at another **held, unsuspended** role; anything else is refused, so it cannot promote |
 | `GET` | `/users/:id` | Bearer | Owner or admin only |
-| `PATCH` | `/users/:id` | Bearer | Admin: any account, any field. Customer: own profile, safe fields only |
+| `PATCH` | `/users/:id` | Bearer | Admin: any account, any field. Customer: own profile, safe fields only. `roles`, `activeRole`, `role` and `status` are admin-only — nobody widens their own authority |
+| `POST` | `/users/:id/roles` | Admin | Overwrite the full approved list. The service re-applies the invariants, not the raw body: admin/demoadmin collapse to a single authority, every other pool keeps `customer`, the active dashboard falls back if a held role disappears, and a removed vendor/rider clears its marketplace state |
+| `PATCH` | `/users/:id/roles/revoke` | Admin | Revoke one approved role and drop the account back to `customer` if that was the active dashboard |
+| `PATCH` | `/users/:id/roles/suspension` | Admin | Park or release one approved role **without** revoking it. Refused for `customer` (that is the whole-account `status`) and for admin/demoadmin (removed by a role change, not suspended); suspending the active role steps it back to `customer` |
 | `DELETE` | `/users/:id` | Admin | |
 
 ### Saved addresses
@@ -405,6 +411,27 @@ The public reads above answer for every shopper without a token, and they cannot
 ---
 
 ## 📋 Business Rules
+
+### Multi-role accounts & per-role suspension
+
+One account can be a shopper, a rider and a seller at the same time. Authority lives in three fields on the user document, and the API is the only writer:
+
+| Field | Meaning |
+|---|---|
+| `roles: string[]` | The approved roles — the source of truth. `activeRole` is mirrored into the legacy `role` for older readers. |
+| `activeRole` | The dashboard the account is currently on; the session and switcher read it, never the token claim. |
+| `roleSuspensions: [{role, reason, suspendedAt}]` | Roles the store team parked — still approved, but the account cannot enter that dashboard until released. |
+
+| Rule | How it is enforced |
+|---|---|
+| Admin authority is never shared | `adminSetRoles` collapses admin/demoadmin to a single authority — granting admin drops every other role, and any other pool never gains admin. |
+| Shoppers are always in the pool | Every non-admin role list is forced to keep `customer`, so an account can always fall back to a dashboard. |
+| Active dashboard survives a revocation | If the held role backing `activeRole` disappears, it falls back to `customer` in the same write. |
+| Losing a marketplace role cleans up | Revoking vendor or rider clears that account's marketplace state (status mirrors, references) so nothing dangles. |
+| Suspension is per-role, not per-account | `setRoleSuspension` parks one role while the account keeps shopping and its other dashboards stay open; releasing restores exactly that role. |
+| Some roles cannot be suspended | `customer` is refused (that is the whole-account `status`), and admin/demoadmin is refused (removed by a role change, not parked). |
+| A parked dashboard is truly closed | Switching into a suspended role and calling that role's API routes are both refused until released. |
+| Nobody widens their own authority | `roles`, `activeRole` and `status` are admin-only writes; a user only switches their own active role among held, unsuspended ones. |
 
 ### Vendor application lifecycle
 
