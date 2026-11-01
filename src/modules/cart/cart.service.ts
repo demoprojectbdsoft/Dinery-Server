@@ -2,7 +2,7 @@ import { Cart } from "./cart.model";
 import { Product } from "../product/product.model";
 import { User } from "../user/user.model";
 import { ApiError } from "../../utils/apiError";
-import { canShop, roleLabel } from "../../utils/roles";
+import { canShopWithRoles, roleLabel } from "../../utils/roles";
 
 // Fetches user cart with populated product data and precalculated totals
 export async function getCartByUserId(userId: string) {
@@ -58,8 +58,11 @@ function assertInStock(product: any) {
 
 export async function addToCart(userId: string, productId: string, quantity: number) {
   const user = await User.findById(userId);
-  if (user && !canShop(user.role)) {
-    throw new ApiError(403, `${roleLabel(user.role)} accounts cannot add products to cart`);
+  // The strict multi-role rule: only an account whose approved `roles` array
+  // contains `customer` may add to a cart. The mirror `role` string is the
+  // fallback for legacy rows the migration has not touched yet.
+  if (user && !canShopWithRoles(user.roles, user.role)) {
+    throw new ApiError(403, `${roleLabel(user.activeRole || user.role)} accounts cannot add products to cart`);
   }
 
   const product = await findProductOrThrow(productId);

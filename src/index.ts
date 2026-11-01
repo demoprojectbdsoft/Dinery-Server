@@ -8,9 +8,24 @@ import { expireStaleWarranties } from "./modules/warranty/warranty.service";
 import { expireStaleDeliveries } from "./modules/delivery/delivery.service";
 import { expireDueSubscriptions } from "./modules/vendor/vendor-subscription.service";
 import { expireDuePromotions } from "./modules/vendor/featured-promotion.service";
+import { syncLegacyRoles } from "./modules/user/user.service";
 
 async function startServer() {
   await connectDB();
+
+  // One-off sweep that gives every pre-multi-role row a `roles` array and an
+  // `activeRole` mirror. It is idempotent, so a restart never re-touches an
+  // account that already fits the shape. The rider and vendor approval paths
+  // also `$addToSet` on their own, so a row that slipped past this sweep still
+  // gains the entries it needs on its next state change.
+  try {
+    const migrated = await syncLegacyRoles();
+    if (migrated.updated > 0) {
+      console.log(`[STARTUP] Multi-role migration touched ${migrated.updated} account(s)`);
+    }
+  } catch (err) {
+    console.error("[STARTUP] Multi-role migration failed:", err);
+  }
 
   const timezone = process.env.CRON_TIMEZONE || "Asia/Dhaka";
 

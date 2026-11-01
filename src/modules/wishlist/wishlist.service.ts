@@ -2,7 +2,7 @@ import { Wishlist } from "./wishlist.model";
 import { Product } from "../product/product.model";
 import { User } from "../user/user.model";
 import { ApiError } from "../../utils/apiError";
-import { canShop, roleLabel } from "../../utils/roles";
+import { canShopWithRoles, roleLabel } from "../../utils/roles";
 
 // Fetches user wishlist and returns items along with totalItems count
 export async function getWishlistByUserId(userId: string) {
@@ -16,8 +16,13 @@ export async function getWishlistByUserId(userId: string) {
 
 export async function addToWishlist(userId: string, productId: string) {
   const user = await User.findById(userId);
-  if (user && !canShop(user.role)) {
-    throw new ApiError(403, `${roleLabel(user.role)} accounts cannot add products to wishlist`);
+  // Same strict rule as the cart: an account needs `customer` in its approved
+  // roles before it can save products to a wishlist.
+  if (user && !canShopWithRoles(user.roles, user.role)) {
+    throw new ApiError(
+      403,
+      `${roleLabel(user.activeRole || user.role)} accounts cannot add products to wishlist`
+    );
   }
 
   const product = await Product.findById(productId);

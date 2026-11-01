@@ -9,6 +9,7 @@ import { SubscriptionTransaction, VendorSubscription } from "./vendor-subscripti
 import { notifyAdminVendorApplication, notifyVendorApplication } from "./vendor.notifications";
 import { getPlan } from "./vendor-plan.service";
 import { billingDays } from "./vendor.types";
+import { normalizeRoles } from "../../utils/roles";
 import type { CreateApplicationInput, ReviewApplicationInput, VendorApplicationQuery } from "./vendor-application.validator";
 
 /**
@@ -83,20 +84,19 @@ async function loadApplicant(userId: string) {
 }
 
 /**
- * Whether this account may open an application.
+ * Whether this account may open a vendor application.
  *
- * Admins and riders do not convert, and a vendor already has a shop. A customer
- * with no application — or with a finished one — may apply.
+ * Admins do not convert, and a vendor already has a shop. A customer — or a
+ * customer who is also an approved rider — may apply, because the multi-role
+ * design lets one account hold both authorities at once.
  */
 function assertCanApply(user: any) {
-  const role = String(user.role || "customer").toLowerCase();
-  if (role === "admin" || role === "demoadmin") {
+  const pool = normalizeRoles(user.roles);
+  const legacy = pool.length > 0 ? pool : normalizeRoles(user.role || "customer");
+  if (legacy.includes("admin") || legacy.includes("demoadmin")) {
     throw new ApiError(403, "Administrator accounts cannot apply to become a vendor");
   }
-  if (role === "rider") {
-    throw new ApiError(403, "Rider accounts cannot apply to become a vendor");
-  }
-  if (role === "vendor" || user.vendorStoreId) {
+  if (legacy.includes("vendor") || user.vendorStoreId) {
     throw new ApiError(409, "This account already owns a store");
   }
 }
@@ -497,11 +497,17 @@ export async function reviewApplication(
     // The conversion: the same user row gains vendor authority. Nothing else
     // about the account is touched, so orders, reviews, the wishlist, the
     // wallet and every address stay exactly as they were.
+    //
+    // `roles` is a set on purpose. An existing customer keeps the `customer`
+    // entry, which is what continues to unlock their cart; a rider who is now
+    // also a seller keeps both. The account's `activeRole` (and therefore the
+    // `role` mirror) is deliberately left alone — an approval does not move
+    // the person out of the dashboard they were already in.
     await User.updateOne(
       { _id: fresh.userId },
       {
+        $addToSet: { roles: { $each: ["customer", "vendor"] } },
         $set: {
-          role: "vendor",
           vendorStatus: "approved",
           vendorStoreId: store._id,
           vendorApplicationId: fresh._id,

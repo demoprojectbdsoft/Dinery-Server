@@ -8,7 +8,11 @@ import { demoStore, isDemoAdmin } from "../modules/demo/demo.context";
 type AuthUser = {
   id: string;
   email?: string;
+  /** The dashboard this account is currently using. Mirrors `activeRole`. */
   role?: string;
+  /** Every role an admin has approved. The authority the middleware checks. */
+  roles?: string[];
+  activeRole?: string;
 };
 
 const JWKS = createRemoteJWKSet(new URL(`${ENV.NEXT_PUBLIC_CLIENT_URL}/api/auth/jwks`));
@@ -60,11 +64,32 @@ async function userFromSession(token: string): Promise<AuthUser | null> {
   });
   if (!user) return null;
 
-  return { id: String(user._id), email: user.email, role: user.role };
+  return shapeFromRecord({ id: String(user._id), email: user.email }, user);
 }
 
 /**
- * Re-reads the role from the database after a JWT check.
+ * Rebuilds the auth view from whatever the database has for this row.
+ *
+ * Older rows only carry `role`; newer ones also hold `roles: [String]` and
+ * `activeRole`. The shape keeps both so the role middleware can read the array
+ * as the authority and still fall back to the string on an unmigrated account.
+ */
+function shapeFromRecord(base: AuthUser, record: any): AuthUser {
+  const roles: string[] | undefined = Array.isArray(record?.roles)
+    ? record.roles.filter((value: unknown): value is string => typeof value === "string")
+    : undefined;
+  const activeRole: string | undefined =
+    typeof record?.activeRole === "string" ? record.activeRole : undefined;
+  return {
+    ...base,
+    role: activeRole ?? record?.role ?? base.role,
+    activeRole,
+    roles,
+  };
+}
+
+/**
+ * Re-reads the roles from the database after a JWT check.
  *
  * A JWT carries the role it was minted with, so an account promoted to rider
  * (or demoted) would keep its old authority until the token expires. The
@@ -86,7 +111,7 @@ async function withCurrentRole(user: AuthUser): Promise<AuthUser | null> {
     } as any);
 
     if (!record) return null;
-    return { ...user, role: record.role ?? user.role, email: record.email ?? user.email };
+    return shapeFromRecord(user, record);
   } catch {
     // A database hiccup must not sign everybody out: the token was valid.
     return user;

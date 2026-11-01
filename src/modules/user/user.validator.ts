@@ -1,9 +1,29 @@
 import { z } from "zod";
+import { USER_ROLES } from "./user.model";
+
+/**
+ * Roles the caller may hand to the update endpoint.
+ *
+ * `demoadmin` is deliberately excluded from the writable set: the sandboxed
+ * admin is created by seeding, never by an admin typing the string into a
+ * form. The list still validates against `USER_ROLES` so adding a new role
+ * later will not silently drop out of the check.
+ */
+const ASSIGNABLE_ROLES = USER_ROLES.filter((role) => role !== "demoadmin") as unknown as [
+  string,
+  ...string[]
+];
 
 export const updateUserSchema = z.object({
   name: z.string().min(1).optional(),
   image: z.string().optional(),
-  role: z.enum(["admin", "customer", "rider", "vendor"]).optional(),
+  role: z.enum(ASSIGNABLE_ROLES).optional(),
+  /**
+   * The full approved list. Only written by an admin — and only by the review
+   * flow or the revoke desk, never by a customer's own PATCH.
+   */
+  roles: z.array(z.enum(ASSIGNABLE_ROLES)).optional(),
+  activeRole: z.enum(ASSIGNABLE_ROLES).optional(),
   plan: z.string().optional(),
   status: z.enum(["active", "suspended"]).optional(),
   member: z.enum(["silver", "gold", "platinum", "diamond"]).optional(),
@@ -24,6 +44,8 @@ export const updateUserSchema = z.object({
  */
 export const ADMIN_ONLY_USER_FIELDS = [
   "role",
+  "roles",
+  "activeRole",
   "plan",
   "status",
   "member",
@@ -47,6 +69,26 @@ export const selfUpdateUserSchema = updateUserSchema.pick({
   availability: true,
 });
 
+/**
+ * Body for `PATCH /api/users/me/active-role`.
+ *
+ * The server validates the choice against the account's approved roles, so a
+ * client cannot claim a role it does not hold by naming it here.
+ */
+export const setActiveRoleSchema = z.object({
+  role: z.enum(ASSIGNABLE_ROLES),
+});
+
+/**
+ * Body for the admin revoke desk. `role` names which approved entry to remove;
+ * the service refuses to strip a user's last role and quietly falls back to
+ * `customer` if that was the one held.
+ */
+export const revokeRoleSchema = z.object({
+  role: z.enum(ASSIGNABLE_ROLES),
+  reason: z.string().trim().max(500).optional().default(""),
+});
+
 export const getUsersQuerySchema = z.object({
   role: z.string().optional(),
   status: z.string().optional(),
@@ -59,3 +101,5 @@ export const getUsersQuerySchema = z.object({
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 export type SelfUpdateUserInput = z.infer<typeof selfUpdateUserSchema>;
 export type GetUsersQuery = z.infer<typeof getUsersQuerySchema>;
+export type SetActiveRoleInput = z.infer<typeof setActiveRoleSchema>;
+export type RevokeRoleInput = z.infer<typeof revokeRoleSchema>;

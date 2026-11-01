@@ -1,6 +1,6 @@
 import { ApiError } from "./apiError";
 import { refIdString } from "./ids";
-import { canShop, isAdminRole, roleLabel } from "./roles";
+import { canShopWithRoles, isAdminRole, normalizeRoles, roleLabel } from "./roles";
 
 /**
  * Authorization helpers for the endpoints that act on "my own" data.
@@ -10,7 +10,13 @@ import { canShop, isAdminRole, roleLabel } from "./roles";
  * is an admin.
  */
 
-type Requester = { id?: string; role?: string } | undefined;
+type Requester =
+  | {
+      id?: string;
+      role?: string;
+      roles?: string[];
+    }
+  | undefined;
 
 /** The caller's own id — for strictly personal resources (cart, wishlist). */
 export function currentUserId(user: Requester): string {
@@ -23,11 +29,18 @@ export function currentUserId(user: Requester): string {
  * The storefront hides those buttons, but a request can always be replayed, so
  * the rule is enforced here as well.
  *
+ * The check reads the approved roles array, not the active one, so a rider who
+ * was also a customer can keep their cart no matter which dashboard opened it.
+ *
  * `action` is the verb phrase, for example "add products to cart".
  */
 export function assertShopper(user: Requester, action: string): void {
-  if (!user?.role || canShop(user.role)) return;
-  throw new ApiError(403, `${roleLabel(user.role)} cannot ${action}`);
+  const pool = normalizeRoles(user?.roles);
+  // Legacy rows only carry `role`; treat that string as the whole list so a
+  // non-shopper is still refused the way the single-role check refused them.
+  if (pool.length === 0 && (!user?.role || canShop(user?.role))) return;
+  if (canShopWithRoles(user?.roles, user?.role)) return;
+  throw new ApiError(403, `${roleLabel(user?.role)} cannot ${action}`);
 }
 
 /**
@@ -52,4 +65,9 @@ export function assertOwnerOrAdmin(
   if (isAdminRole(user?.role)) return;
   if (user?.id && refIdString(owner) === user.id) return;
   throw new ApiError(403, message);
+}
+
+/** Re-uses the shopping rule against the raw canShop helper for legacy reads. */
+function canShop(role?: string | null): boolean {
+  return canShopWithRoles(undefined, role);
 }

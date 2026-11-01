@@ -20,6 +20,8 @@ export const STORE_ACTIVITY_TYPES = [
   "delivery",
   // A vendor applied, resubmitted, or changed plan.
   "vendor",
+  // A rider applied, was approved, rejected or had their access revoked.
+  "rider",
 ] as const;
 
 /**
@@ -47,6 +49,8 @@ export const PERSONAL_ACTIVITY_TYPES = [
   "vendor_stock",
   "vendor_limit",
   "vendor_payment",
+  // The rider side. One line per application event keeps the bell's chips short.
+  "rider_application",
 ] as const;
 
 /** The two lists overlap on purpose, so the enum is built from the union. */
