@@ -9,7 +9,7 @@ import {
 } from "./user.validator";
 import { getMembershipTier } from "../order/order.service";
 import { recordActivity, notifyUser } from "../activity/activity.service";
-import { normalizeRoles } from "../../utils/roles";
+import { normalizeRole, normalizeRoles } from "../../utils/roles";
 
 export async function getUsers(query: GetUsersQuery) {
   const { role, status, search, page, limit } = query;
@@ -213,6 +213,46 @@ export async function revokeRole(userId: string, input: RevokeRoleInput, adminId
     roles: nextRoles,
     activeRole: active,
   };
+}
+
+/**
+ * Promotes the shared demo account to sandboxed admin authority.
+ *
+ * The login screen advertises `DEMO_ADMIN_EMAIL` as an admin, but a normal
+ * sign-up (or a row the migration left as a plain customer) only ever carries
+ * the `customer` entry — so that account lands on the storefront and gets a
+ * 403 at the admin gate. This runs at startup and gives the one advertised
+ * address the `demoadmin` role.
+ *
+ * The array holds `demoadmin` and nothing else, on purpose: an admin never
+ * shops, so the customer entry stays out and the storefront, cart and wishlist
+ * remain locked to real buyers. It is idempotent and only ever touches the
+ * account whose email matches, so a restart cannot demote it again and no other
+ * row is affected.
+ */
+export async function ensureDemoAdmin(): Promise<{ promoted: boolean }> {
+  const email = (process.env.DEMO_ADMIN_EMAIL || "").trim().toLowerCase();
+  if (!email) return { promoted: false };
+
+  // Match case-insensitively without trusting the email's regex metacharacters.
+  const escaped = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const user: any = await User.findOne({
+    email: { $regex: `^${escaped}$`, $options: "i" },
+  }).lean();
+  if (!user) return { promoted: false };
+
+  // Already exactly the sandboxed admin — leave it untouched.
+  const current = normalizeRoles(user.roles);
+  const active = normalizeRole(user.activeRole || user.role);
+  if (current.length === 1 && current[0] === "demoadmin" && active === "demoadmin") {
+    return { promoted: false };
+  }
+
+  await User.updateOne(
+    { _id: user._id },
+    { $set: { roles: ["demoadmin"], activeRole: "demoadmin", role: "demoadmin" } }
+  );
+  return { promoted: true };
 }
 
 /**

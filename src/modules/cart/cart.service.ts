@@ -2,7 +2,7 @@ import { Cart } from "./cart.model";
 import { Product } from "../product/product.model";
 import { User } from "../user/user.model";
 import { ApiError } from "../../utils/apiError";
-import { canShopWithRoles, roleLabel } from "../../utils/roles";
+import { canShopWithRoles, canSwitchToShopper, roleLabel } from "../../utils/roles";
 
 // Fetches user cart with populated product data and precalculated totals
 export async function getCartByUserId(userId: string) {
@@ -58,10 +58,14 @@ function assertInStock(product: any) {
 
 export async function addToCart(userId: string, productId: string, quantity: number) {
   const user = await User.findById(userId);
-  // The strict multi-role rule: only an account whose approved `roles` array
-  // contains `customer` may add to a cart. The mirror `role` string is the
-  // fallback for legacy rows the migration has not touched yet.
-  if (user && !canShopWithRoles(user.roles, user.role)) {
+  // The strict multi-role rule: an account may add to a cart only when its
+  // approved `roles` array carries `customer` AND it is on the customer
+  // dashboard. A rider or vendor who also holds `customer` must switch first;
+  // the mirror `role` string is the fallback for legacy unmigrated rows.
+  if (user && !canShopWithRoles(user.roles, user.role, user.activeRole)) {
+    if (canSwitchToShopper(user.roles, user.activeRole || user.role)) {
+      throw new ApiError(403, "Switch to the customer dashboard to add products to cart");
+    }
     throw new ApiError(403, `${roleLabel(user.activeRole || user.role)} accounts cannot add products to cart`);
   }
 

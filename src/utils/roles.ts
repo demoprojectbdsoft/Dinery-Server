@@ -92,20 +92,44 @@ export function hasAnyRole(
 }
 
 /**
- * Whether the caller may shop, given every role they hold.
+ * Whether the caller may shop right now, given every role they hold.
  *
- * Only the `customer` entry in the approved array unlocks the cart and the
- * wishlist. A rider or a vendor who never had `customer` — a legacy row that
- * predates the migration, or an account granted authority directly — is
- * refused. This is deliberate: it keeps a delivery account from mixing a
- * personal order into the same table a real buyer owns.
+ * Two conditions must both be true: the account carries the `customer` entry
+ * in its approved array, AND it is currently sitting on the customer dashboard
+ * (`activeRole`, mirrored into `role`, is "customer"). A rider or a vendor who
+ * also bought the customer entry is refused while they are in their rider /
+ * vendor workspace — they must switch to the customer role first. An admin or
+ * demo admin never qualifies, because their array has no `customer` to switch
+ * into.
  *
- * Falling back to the single-role check preserves the pre-migration behaviour
- * for accounts the sweep has not touched yet, so a legacy customer keeps
- * shopping while a legacy rider stays out of the cart.
+ * `activeRole` defaults to the legacy `role` string, which the model already
+ * keeps mirrored to `activeRole`. For a pre-migration row with no array at all
+ * the single-role fallback still decides, so a legacy customer keeps shopping
+ * and a legacy rider stays out of the cart.
  */
-export function canShopWithRoles(roles: unknown, legacyRole?: string | null): boolean {
+export function canShopWithRoles(
+  roles: unknown,
+  legacyRole?: string | null,
+  activeRole?: string | null
+): boolean {
   const pool = normalizeRoles(roles);
   if (pool.length === 0) return canShop(legacyRole);
-  return pool.includes("customer");
+  const active = normalizeRole(activeRole ?? legacyRole);
+  return pool.includes("customer") && active === "customer";
 }
+
+/**
+ * Whether the account could shop if it switched to the customer dashboard.
+ *
+ * True when `customer` is in the approved array but the account is currently
+ * on a different workspace. Used only to choose a friendlier refusal message
+ * ("switch to Customer") over the hard "role cannot shop" one.
+ */
+export function canSwitchToShopper(
+  roles: unknown,
+  activeRole?: string | null
+): boolean {
+  const pool = normalizeRoles(roles);
+  return pool.includes("customer") && normalizeRole(activeRole) !== "customer";
+}
+

@@ -8,7 +8,7 @@ import { expireStaleWarranties } from "./modules/warranty/warranty.service";
 import { expireStaleDeliveries } from "./modules/delivery/delivery.service";
 import { expireDueSubscriptions } from "./modules/vendor/vendor-subscription.service";
 import { expireDuePromotions } from "./modules/vendor/featured-promotion.service";
-import { syncLegacyRoles } from "./modules/user/user.service";
+import { syncLegacyRoles, ensureDemoAdmin } from "./modules/user/user.service";
 
 async function startServer() {
   await connectDB();
@@ -25,6 +25,18 @@ async function startServer() {
     }
   } catch (err) {
     console.error("[STARTUP] Multi-role migration failed:", err);
+  }
+
+  // The advertised demo login is only an admin once this grants it the
+  // `demoadmin` role; a plain sign-up leaves it a customer. Runs after the
+  // migration so the sweep can never add a stray `customer` entry back.
+  try {
+    const demo = await ensureDemoAdmin();
+    if (demo.promoted) {
+      console.log("[STARTUP] Demo admin account promoted to `demoadmin`");
+    }
+  } catch (err) {
+    console.error("[STARTUP] Demo admin seeding failed:", err);
   }
 
   const timezone = process.env.CRON_TIMEZONE || "Asia/Dhaka";

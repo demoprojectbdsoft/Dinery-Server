@@ -1,6 +1,12 @@
 import { ApiError } from "./apiError";
 import { refIdString } from "./ids";
-import { canShopWithRoles, isAdminRole, normalizeRoles, roleLabel } from "./roles";
+import {
+  canShopWithRoles,
+  canSwitchToShopper,
+  isAdminRole,
+  normalizeRoles,
+  roleLabel,
+} from "./roles";
 
 /**
  * Authorization helpers for the endpoints that act on "my own" data.
@@ -14,6 +20,7 @@ type Requester =
   | {
       id?: string;
       role?: string;
+      activeRole?: string;
       roles?: string[];
     }
   | undefined;
@@ -25,22 +32,28 @@ export function currentUserId(user: Requester): string {
 }
 
 /**
- * Refuses cart, wishlist and checkout writes for accounts that do not shop.
- * The storefront hides those buttons, but a request can always be replayed, so
- * the rule is enforced here as well.
+ * Refuses cart, wishlist and checkout writes for accounts that are not on the
+ * customer dashboard right now. The storefront hides those buttons, but a
+ * request can always be replayed, so the rule is enforced here as well.
  *
- * The check reads the approved roles array, not the active one, so a rider who
- * was also a customer can keep their cart no matter which dashboard opened it.
+ * The check reads both the approved roles array AND the active dashboard: a
+ * rider or vendor who also holds the customer entry is refused until they
+ * switch to the customer role. An admin or demo admin, whose array has no
+ * `customer` entry at all, is refused outright.
  *
  * `action` is the verb phrase, for example "add products to cart".
  */
 export function assertShopper(user: Requester, action: string): void {
   const pool = normalizeRoles(user?.roles);
+  const active = user?.activeRole || user?.role;
   // Legacy rows only carry `role`; treat that string as the whole list so a
   // non-shopper is still refused the way the single-role check refused them.
   if (pool.length === 0 && (!user?.role || canShop(user?.role))) return;
-  if (canShopWithRoles(user?.roles, user?.role)) return;
-  throw new ApiError(403, `${roleLabel(user?.role)} cannot ${action}`);
+  if (canShopWithRoles(user?.roles, user?.role, active)) return;
+  if (canSwitchToShopper(user?.roles, active)) {
+    throw new ApiError(403, `Switch to the customer dashboard to ${action}`);
+  }
+  throw new ApiError(403, `${roleLabel(active ?? user?.role)} cannot ${action}`);
 }
 
 /**
