@@ -257,11 +257,18 @@ export async function ensureDemoAdmin(): Promise<{ promoted: boolean }> {
 
 /**
  * One-off sweep that gives every existing row a `roles` array and an
- * `activeRole` mirror.
+ * `activeRole` mirror, and heals rows whose legacy `role` drifted out of sync
+ * with the authority array.
  *
  * Runs at server start and is idempotent: only rows that are missing either
- * field are written, so a restart never re-touches an account that already
- * fits the shape.
+ * field — or whose legacy `role` still names an administrator the `roles`
+ * array lost — are written, so a restart never re-touches an account that
+ * already fits the shape.
+ *
+ * The administrator clause closes a real gap: an account whose `role` was set
+ * to `admin` but whose `roles` stayed `["customer"]` would otherwise be left
+ * alone (both fields exist), stranding the admin on the customer dashboard and
+ * locking them out of the admin gate with a 403.
  */
 export async function syncLegacyRoles(): Promise<{ updated: number }> {
   const cursor = User.find({
@@ -270,6 +277,10 @@ export async function syncLegacyRoles(): Promise<{ updated: number }> {
       { roles: { $size: 0 } },
       { activeRole: { $exists: false } },
       { activeRole: null },
+      // A legacy `role` that still names an administrator but whose authority
+      // array never gained that entry — the divergence that strands an admin.
+      { role: "admin", roles: { $ne: "admin" } },
+      { role: "demoadmin", roles: { $ne: "demoadmin" } },
     ],
   })
     .select("_id role roles activeRole vendorStatus riderStatus")
@@ -279,13 +290,24 @@ export async function syncLegacyRoles(): Promise<{ updated: number }> {
   for await (const user of cursor as any) {
     const legacy = normalizeRoles((user as any).role)[0] || "customer";
     const roles = normalizeRoles((user as any).roles);
-    const nextRoles = roles.length > 0 ? Array.from(new Set([...roles, "customer"])) : [legacy];
-    // Admin and rider authority is preserved; a legacy admin stays an admin,
-    // and a legacy rider also keeps the customer entry because they still shop.
-    if (!nextRoles.includes("customer") && legacy !== "admin" && legacy !== "demoadmin") {
-      nextRoles.push("customer");
+    const isAdministrator = legacy === "admin" || legacy === "demoadmin";
+
+    let nextRoles: string[];
+    let active: string;
+
+    if (isAdministrator) {
+      // An admin holds a single authority and never shops, so the array
+      // collapses to the admin role and any stray `customer` entry is dropped.
+      nextRoles = [legacy];
+      active = legacy;
+    } else {
+      // A legacy rider also keeps the customer entry because they still shop.
+      nextRoles = roles.length > 0 ? Array.from(new Set([...roles, "customer"])) : [legacy];
+      if (!nextRoles.includes("customer")) {
+        nextRoles.push("customer");
+      }
+      active = normalizeRoles((user as any).activeRole)[0] || legacy;
     }
-    const active = normalizeRoles((user as any).activeRole)[0] || legacy;
 
     await User.updateOne(
       { _id: (user as any)._id },
