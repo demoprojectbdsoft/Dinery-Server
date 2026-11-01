@@ -12,6 +12,7 @@ import {
   revokeRoleSchema,
   setActiveRoleSchema,
   selfUpdateUserSchema,
+  setRoleSuspensionSchema,
 } from "./user.validator";
 
 const ADMIN_ONLY = new Set<string>(ADMIN_ONLY_USER_FIELDS);
@@ -112,12 +113,28 @@ export const revokeRole = catchAsync(async (req, res) => {
  * Admin only. Writes the full approved list onto an account in one call, used
  * by the user-edit screen when a store team member needs to fix a legacy row
  * or grant a role without an application. Never exposed to the account owner.
+ * The service — not the raw body — decides the invariants: admins collapse to
+ * one authority, shoppers keep the customer entry, the active dashboard falls
+ * back when it disappears, and a removed workspace clears its marketplace
+ * state the same way an explicit revoke does.
  */
 export const setRoles = catchAsync(async (req, res) => {
   const id = req.params.id as string;
   const pool = normalizeRoles((req.body || {}).roles);
   if (pool.length === 0) throw new ApiError(400, "At least one role is required");
 
-  const updated = await userService.updateUser(id, { roles: pool } as never);
+  const updated = await userService.adminSetRoles(id, { roles: pool }, req.user?.id);
   apiResponse(res, 200, updated, "Roles updated");
+});
+
+/**
+ * Admin only. Parks or releases one approved role without touching the rest
+ * of the account — a rider with a lapsed licence loses the rider dashboard
+ * and keeps buying as a customer.
+ */
+export const setRoleSuspension = catchAsync(async (req, res) => {
+  const id = req.params.id as string;
+  const input = setRoleSuspensionSchema.parse(req.body || {});
+  const result = await userService.setRoleSuspension(id, input, req.user?.id);
+  apiResponse(res, 200, result, "Role suspension updated");
 });

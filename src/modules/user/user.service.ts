@@ -5,6 +5,7 @@ import {
   GetUsersQuery,
   RevokeRoleInput,
   SetActiveRoleInput,
+  SetRoleSuspensionInput,
   UpdateUserInput,
 } from "./user.validator";
 import { getMembershipTier } from "../order/order.service";
@@ -100,16 +101,23 @@ export async function deleteUser(id: string) {
  */
 export async function getMyRoles(userId: string) {
   const user: any = await User.findById(userId)
-    .select("roles activeRole role status vendorStatus riderStatus")
+    .select("roles activeRole role status vendorStatus riderStatus roleSuspensions")
     .lean();
   if (!user) throw new ApiError(404, "User not found");
 
   const pool = normalizeRoles(user.roles);
   const resolved = pool.length > 0 ? pool : normalizeRoles(user.role || "customer");
+  const suspended = suspendedRoleNames(user);
   const active = normalizeRoles(user.activeRole || user.role)[0] || resolved[0] || "customer";
+  // A parked dashboard is not a place the switcher may land, so the fallback
+  // skips it the same way the API guard does.
+  const usable = resolved.includes(active) && !suspended.includes(active)
+    ? active
+    : resolved.find((role) => role === "customer" || !suspended.includes(role)) || resolved[0];
   return {
     roles: resolved,
-    activeRole: resolved.includes(active) ? active : resolved[0],
+    suspendedRoles: suspended,
+    activeRole: usable,
     vendorStatus: user.vendorStatus || "none",
     riderStatus: user.riderStatus || "none",
   };
@@ -132,6 +140,11 @@ export async function setActiveRole(userId: string, input: SetActiveRoleInput) {
   const wanted = String(input.role || "").toLowerCase();
   if (!pool.includes(wanted)) {
     throw new ApiError(403, "This account has not been approved for that dashboard");
+  }
+  // A parked dashboard cannot be entered by switching, even though the role
+  // is still approved — only an admin lifting the suspension reopens it.
+  if (wanted !== "customer" && suspendedRoleNames(user).includes(wanted)) {
+    throw new ApiError(403, "That dashboard is suspended for this account");
   }
 
   user.activeRole = wanted;
@@ -212,6 +225,176 @@ export async function revokeRole(userId: string, input: RevokeRoleInput, adminId
   return {
     roles: nextRoles,
     activeRole: active,
+  };
+}
+
+/** The role names parked in `roleSuspensions`, defensively normalised. */
+function suspendedRoleNames(user: any): string[] {
+  const rows = Array.isArray(user?.roleSuspensions) ? user.roleSuspensions : [];
+  return rows
+    .map((row: any) => normalizeRole(typeof row?.role === "string" ? row.role : null))
+    .filter(Boolean);
+}
+
+/**
+ * Writes the whole approved list the way the admin desk means it.
+ *
+ * The raw `POST /:id/roles` payload used to land on `updateUser` untouched, so
+ * a desk could park an account on a dashboard it no longer held, leave a
+ * revoked vendor's marketplace state pointing at a stale application, or hand
+ * an admin entry to an account that still shopped. This keeps every invariant
+ * the rest of the system already assumes:
+ *
+ * - an administrator holds exactly one authority and never shops, so any
+ *   customer/rider/vendor entry is dropped the moment admin is granted;
+ * - every non-admin account keeps `customer`, because revoking a workspace
+ *   must still leave the person able to sign in and shop;
+ * - `activeRole` always names a held, unsuspended dashboard — when the old one
+ *   disappears the account falls back to customer, or to its first entry;
+ * - removing vendor/rider authority clears the marketplace state the same way
+ *   `revokeRole` does, so no stale "approved" screen can reopen a workspace.
+ */
+export async function adminSetRoles(userId: string, input: { roles: string[] }, adminId?: string) {
+  if (!Types.ObjectId.isValid(userId)) throw new ApiError(404, "User not found");
+
+  const user: any = await User.findById(userId);
+  if (!user) throw new ApiError(404, "User not found");
+
+  const requested = normalizeRoles(input.roles);
+  if (requested.length === 0) throw new ApiError(400, "At least one role is required");
+
+  const isAdminPool = requested.includes("admin") || requested.includes("demoadmin");
+  // An admin desk cannot demote itself into a shopper by accident: the array
+  // collapses to the single admin authority, mirroring ensureDemoAdmin.
+  const nextRoles = isAdminPool
+    ? [requested.includes("admin") ? "admin" : "demoadmin"]
+    : Array.from(new Set([...requested, "customer"]));
+
+  const previous = normalizeRoles(user.roles);
+  const removed = previous.filter((role) => !nextRoles.includes(role));
+
+  const suspended = suspendedRoleNames(user).filter((role) => nextRoles.includes(role));
+  let active = normalizeRole(user.activeRole);
+  if (!nextRoles.includes(active) || (active !== "customer" && suspended.includes(active))) {
+    active = nextRoles.includes("customer") ? "customer" : nextRoles[0];
+  }
+
+  user.roles = nextRoles;
+  user.activeRole = active;
+  user.role = active;
+  for (const role of removed) {
+    if (role === "vendor") {
+      user.vendorStatus = "none";
+      user.vendorApplicationId = null;
+    }
+    if (role === "rider") {
+      user.riderStatus = "none";
+      user.riderApplicationId = null;
+    }
+  }
+  // A role that left the array and came back was effectively revoked and
+  // re-granted; its old marketplace state must not resurface.
+  for (const role of nextRoles.filter((r) => requested.includes(r) && previous.length > 0 && !previous.includes(r))) {
+    if (role === "vendor") {
+      user.vendorStatus = "none";
+      user.vendorApplicationId = null;
+    }
+    if (role === "rider") {
+      user.riderStatus = "none";
+      user.riderApplicationId = null;
+    }
+  }
+  await user.save();
+
+  await recordActivity({
+    type: "user",
+    title: `Roles updated for ${user.email || user.name || "an account"}`,
+    detail: `${nextRoles.join(", ")} · by admin`,
+    ref: String(user._id),
+  });
+
+  return {
+    roles: nextRoles,
+    activeRole: active,
+    roleSuspensions: user.roleSuspensions || [],
+    removed,
+  };
+}
+
+/**
+ * Parks or releases one approved role without touching the account itself.
+ *
+ * `customer` has no per-role suspension — that decision is the whole-account
+ * `status` field — and an administrator's authority is never parked here;
+ * demoting staff is a role change, not a suspension. When the parked role is
+ * the dashboard the person is standing on, the account steps back to customer
+ * (or its next held role) in the same write.
+ */
+export async function setRoleSuspension(
+  userId: string,
+  input: SetRoleSuspensionInput,
+  adminId?: string
+) {
+  if (!Types.ObjectId.isValid(userId)) throw new ApiError(404, "User not found");
+
+  const user: any = await User.findById(userId);
+  if (!user) throw new ApiError(404, "User not found");
+
+  const target = String(input.role || "").toLowerCase();
+  if (target === "customer") {
+    throw new ApiError(400, "Suspending the customer role means suspending the whole account — use the account status");
+  }
+  if (target === "admin" || target === "demoadmin") {
+    throw new ApiError(400, "Administrator access is removed by a role change, not suspended");
+  }
+
+  const pool = normalizeRoles(user.roles);
+  if (!pool.includes(target)) {
+    throw new ApiError(400, `This account does not hold the ${target} role`);
+  }
+
+  const rows = Array.isArray(user.roleSuspensions) ? user.roleSuspensions : [];
+  const nextRows = rows.filter((row: any) => normalizeRole(row?.role) !== target);
+  if (input.suspended) {
+    nextRows.push({
+      role: target,
+      reason: input.reason?.trim() || "",
+      suspendedAt: new Date(),
+    });
+  }
+  user.roleSuspensions = nextRows;
+
+  // The parked dashboard must not stay the active one.
+  if (input.suspended && normalizeRole(user.activeRole) === target) {
+    const active = pool.includes("customer") ? "customer" : pool.find((role) => role !== target) || "customer";
+    user.activeRole = active;
+    user.role = active;
+  }
+  await user.save();
+
+  await notifyUser({
+    userId: String(user._id),
+    role: target === "rider" ? "rider" : "vendor",
+    type: target === "rider" ? "rider_application" : "vendor_application",
+    title: input.suspended ? `Your ${target} access is suspended` : `Your ${target} access is back`,
+    detail: input.suspended
+      ? input.reason?.trim() || "Contact support if you think this is a mistake."
+      : "The dashboard is open again — nothing else about your account changed.",
+    ref: String(adminId || ""),
+  });
+
+  await recordActivity({
+    type: target === "rider" ? "rider" : "vendor",
+    title: `${target} role ${input.suspended ? "suspended" : "released"}`,
+    detail: `${user.email || "Account"} · by admin`,
+    ref: String(user._id),
+  });
+
+  return {
+    role: target,
+    suspended: Boolean(input.suspended),
+    roleSuspensions: nextRows,
+    activeRole: normalizeRole(user.activeRole),
   };
 }
 

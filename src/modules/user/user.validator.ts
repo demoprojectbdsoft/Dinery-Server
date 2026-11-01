@@ -89,6 +89,17 @@ export const revokeRoleSchema = z.object({
   reason: z.string().trim().max(500).optional().default(""),
 });
 
+/**
+ * Body for the admin per-role suspension desk. Unlike a revoke, a suspension
+ * keeps the entry approved — it only parks the dashboard until an admin lifts
+ * it — so the account can be caught again without a fresh application.
+ */
+export const setRoleSuspensionSchema = z.object({
+  role: z.enum(ASSIGNABLE_ROLES),
+  suspended: z.boolean(),
+  reason: z.string().trim().max(500).optional().default(""),
+});
+
 export const getUsersQuerySchema = z.object({
   role: z.string().optional(),
   status: z.string().optional(),
@@ -103,3 +114,4 @@ export type SelfUpdateUserInput = z.infer<typeof selfUpdateUserSchema>;
 export type GetUsersQuery = z.infer<typeof getUsersQuerySchema>;
 export type SetActiveRoleInput = z.infer<typeof setActiveRoleSchema>;
 export type RevokeRoleInput = z.infer<typeof revokeRoleSchema>;
+export type SetRoleSuspensionInput = z.infer<typeof setRoleSuspensionSchema>;

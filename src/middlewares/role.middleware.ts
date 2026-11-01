@@ -22,6 +22,14 @@ export function requireRole(...allowedRoles: string[]) {
     const isAllowed = hasAnyRole(user?.roles, allowed, user?.role);
     const isAdminAsking = allowed.includes("admin") && isAdminRole(user?.role);
 
+    // A parked workspace is closed even though the role stays approved: the
+    // suspension service moves the account off that dashboard, so an active
+    // role matching a suspended entry means a stale token or a direct call.
+    const active = normalizeRole(user?.activeRole ?? user?.role);
+    if (active && active !== "customer" && user?.suspendedRoles?.includes(active)) {
+      return next(new ApiError(403, `Your ${active} access is suspended. Contact support.`));
+    }
+
     if (!isAllowed && !isAdminAsking) {
       return next(new ApiError(403, "You don't have permission to perform this action"));
     }

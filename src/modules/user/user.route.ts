@@ -3,6 +3,7 @@ import { validate } from "../../utils/validate";
 import {
   revokeRoleSchema,
   setActiveRoleSchema,
+  setRoleSuspensionSchema,
   updateUserSchema,
 } from "./user.validator";
 import * as userController from "./user.controller";
@@ -31,6 +32,13 @@ router.post(
   requireAuth,
   requireRole("admin"),
   userController.setRoles
+);
+router.patch(
+  "/:id/roles/suspension",
+  requireAuth,
+  requireRole("admin"),
+  validate(setRoleSuspensionSchema),
+  userController.setRoleSuspension
 );
 
 // ─── Self-service ─────────────────────────────────────────────────────────────

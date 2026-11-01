@@ -46,6 +46,26 @@ const userSchema = new Schema(
       enum: USER_ROLES as unknown as string[],
       default: "customer",
     },
+    /**
+     * Roles parked by the store team without closing the account.
+     *
+     * A suspension lives here per role, so a rider with a lapsed licence loses
+     * the rider dashboard while the same person keeps shopping as a customer.
+     * The whole account is still a separate decision — that one lives in
+     * `status`. A suspended entry remains inside `roles`: revoking and
+     * suspending are different tools, and an un-suspend must not need a fresh
+     * application.
+     */
+    roleSuspensions: {
+      type: [
+        {
+          role: { type: String, enum: USER_ROLES as unknown as string[] },
+          reason: { type: String, default: "" },
+          suspendedAt: { type: Date },
+        },
+      ],
+      default: [],
+    },
     plan: { type: String },
     status: { type: String },
     member: { type: String },

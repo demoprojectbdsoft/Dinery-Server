@@ -13,6 +13,8 @@ type AuthUser = {
   /** Every role an admin has approved. The authority the middleware checks. */
   roles?: string[];
   activeRole?: string;
+  /** Approved roles the store team parked — reachable by a switch, not a call. */
+  suspendedRoles?: string[];
 };
 
 const JWKS = createRemoteJWKSet(new URL(`${ENV.NEXT_PUBLIC_CLIENT_URL}/api/auth/jwks`));
@@ -80,11 +82,17 @@ function shapeFromRecord(base: AuthUser, record: any): AuthUser {
     : undefined;
   const activeRole: string | undefined =
     typeof record?.activeRole === "string" ? record.activeRole : undefined;
+  const suspendedRoles: string[] = Array.isArray(record?.roleSuspensions)
+    ? record.roleSuspensions
+        .map((row: any) => (typeof row?.role === "string" ? row.role.toLowerCase() : ""))
+        .filter(Boolean)
+    : [];
   return {
     ...base,
     role: activeRole ?? record?.role ?? base.role,
     activeRole,
     roles,
+    suspendedRoles,
   };
 }
 
