@@ -28,59 +28,122 @@ const codeField = z
   .regex(/^[A-Z0-9_-]+$/, "Use capital letters, numbers, hyphens and underscores only")
   .transform((value) => value.toUpperCase());
 
-export const createCouponSchema = z
-  .object({
-    code: codeField,
-    title: z.string().trim().max(120).optional().default(""),
-    description: z.string().trim().max(500).optional().default(""),
+/**
+ * The bare fields, once.
+ *
+ * Zod v4 refuses `.partial()` on a schema carrying refinements, and a `.partial()`
+ * would keep the create-side `.default()`s — a PATCH that flips one switch would
+ * resend empty titles and zeroed limits and the service would write them over the
+ * coupon. So create layers its defaults on here, and update marks every field
+ * optional instead.
+ */
+const couponFields = {
+  code: codeField,
+  title: z.string().trim().max(120),
+  description: z.string().trim().max(500),
 
-    discountType: z.enum(["percentage", "fixed"]),
-    discountValue: z.coerce.number().min(0),
+  discountType: z.enum(["percentage", "fixed"]),
+  discountValue: z.coerce.number().min(0),
 
-    minOrderAmount: z.coerce.number().min(0).optional().default(0),
-    /** 0 means "no cap" on a percentage coupon. */
-    maxDiscountAmount: z.coerce.number().min(0).optional().default(0),
+  minOrderAmount: z.coerce.number().min(0),
+  /** 0 means "no cap" on a percentage coupon. */
+  maxDiscountAmount: z.coerce.number().min(0),
 
-    startDate: z.coerce.date(),
-    endDate: z.coerce.date(),
+  startDate: z.coerce.date(),
+  endDate: z.coerce.date(),
 
-    totalUsageLimit: z.coerce.number().int().min(0).optional().default(0),
-    perCustomerLimit: z.coerce.number().int().min(0).optional().default(0),
+  totalUsageLimit: z.coerce.number().int().min(0),
+  perCustomerLimit: z.coerce.number().int().min(0),
 
-    /** Empty means every product the owner may discount. */
-    productIds: z.array(objectId).max(100).optional().default([]),
-    categoryIds: z.array(objectId).max(50).optional().default([]),
+  /** Empty means every product the owner may discount. */
+  productIds: z.array(objectId).max(100),
+  categoryIds: z.array(objectId).max(50),
 
-    isActive: z.boolean().optional().default(true),
-  })
-  .superRefine((data, ctx) => {
-    if (data.discountType === "percentage" && data.discountValue > 100) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "A percentage coupon is between 1 and 100",
-        path: ["discountValue"],
-      });
-    }
+  isActive: z.boolean(),
+};
+
+/**
+ * Cross-field rules shared by both writers.
+ *
+ * Update only sees what was sent, so every check first asks whether the fields
+ * it needs are in the body; create always has all of them.
+ */
+function checkDiscountValueAndDates(
+  data: {
+    discountType?: "percentage" | "fixed";
+    discountValue?: number;
+    startDate?: Date;
+    endDate?: Date;
+  },
+  ctx: z.RefinementCtx
+) {
+  if (data.discountValue !== undefined) {
     if (data.discountValue <= 0) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "A coupon has to take something off",
         path: ["discountValue"],
       });
     }
-    if (data.endDate.getTime() <= data.startDate.getTime()) {
+    if (data.discountType === "percentage" && data.discountValue > 100) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "A coupon has to end after it starts",
-        path: ["endDate"],
+        code: "custom",
+        message: "A percentage coupon is between 1 and 100",
+        path: ["discountValue"],
       });
     }
-  });
+  }
+  if (data.startDate && data.endDate && data.endDate.getTime() <= data.startDate.getTime()) {
+    ctx.addIssue({
+      code: "custom",
+      message: "A coupon has to end after it starts",
+      path: ["endDate"],
+    });
+  }
+}
+
+export const createCouponSchema = z
+  .object({
+    ...couponFields,
+    title: couponFields.title.optional().default(""),
+    description: couponFields.description.optional().default(""),
+    minOrderAmount: couponFields.minOrderAmount.optional().default(0),
+    maxDiscountAmount: couponFields.maxDiscountAmount.optional().default(0),
+    totalUsageLimit: couponFields.totalUsageLimit.optional().default(0),
+    perCustomerLimit: couponFields.perCustomerLimit.optional().default(0),
+    productIds: couponFields.productIds.optional().default([]),
+    categoryIds: couponFields.categoryIds.optional().default([]),
+    isActive: couponFields.isActive.optional().default(true),
+  })
+  .superRefine(checkDiscountValueAndDates);
 
 /** Every field is optional, so a single switch can be flipped without resending the code. */
-export const updateCouponSchema = createCouponSchema
-  .partial()
-  .refine((data) => Object.keys(data).length > 0, "Send at least one field to change");
+export const updateCouponSchema = z
+  .object({
+    code: couponFields.code.optional(),
+    title: couponFields.title.optional(),
+    description: couponFields.description.optional(),
+    discountType: couponFields.discountType.optional(),
+    discountValue: couponFields.discountValue.optional(),
+    minOrderAmount: couponFields.minOrderAmount.optional(),
+    maxDiscountAmount: couponFields.maxDiscountAmount.optional(),
+    startDate: couponFields.startDate.optional(),
+    endDate: couponFields.endDate.optional(),
+    totalUsageLimit: couponFields.totalUsageLimit.optional(),
+    perCustomerLimit: couponFields.perCustomerLimit.optional(),
+    productIds: couponFields.productIds.optional(),
+    categoryIds: couponFields.categoryIds.optional(),
+    isActive: couponFields.isActive.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (Object.keys(data).length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Send at least one field to change",
+      });
+    }
+    checkDiscountValueAndDates(data, ctx);
+  });
 
 /**
  * What the cart and the checkout send to ask "does this code work on my basket?".
