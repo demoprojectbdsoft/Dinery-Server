@@ -190,8 +190,11 @@ export async function notifyOrderStatusChanged(order: any, status: string, note?
         { label: "Total", value: money(order.totalAmount) },
       ],
       note,
-      actionLabel: "Track your order",
-      actionPath: "/dashboard/customer/orders",
+      // A shipped order always has a rider on it, so the email points at the
+      // live tracking page rather than the orders list. Earlier and later
+      // stages have no map to open, so they keep the orders page.
+      actionLabel: status === "shipped" ? "Track your delivery" : "View your orders",
+      actionPath: status === "shipped" ? `/track-order/${ref}` : "/dashboard/customer/orders",
       brand,
     });
   } catch (err) {

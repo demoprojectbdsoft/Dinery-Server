@@ -636,6 +636,24 @@ export async function assignDelivery(input: AssignDeliveryInput, adminId?: strin
   }
 
   await announceAssignment(delivery);
+
+  // When the order ships in the same step, the order_shipped line already
+  // tells the customer a rider is on the case (and now links to the tracking
+  // page). Assigning without shipping would otherwise leave the customer in the
+  // dark, so a delivery_update line points them at the tracking page the
+  // moment a rider is chosen — before the parcel has even left the store.
+  if (!input.ship) {
+    await notifyCustomerDelivery({
+      userId: String(order.userId),
+      deliveryId: String(delivery._id),
+      orderId: String(order._id),
+      orderNumber: shortOrderNumber(order._id),
+      title: "A rider has been assigned",
+      detail:
+        "Your order has been assigned to a rider. We'll let you know as soon as it's on its way.",
+    });
+  }
+
   const populated = await Delivery.findById(delivery._id).populate(
     "riderId",
     "name phone vehicleType vehicleNumber"
